@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import uuid
-from typing import Optional
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,7 +7,9 @@ from image_editor.models import (
     CreateTurnRequest,
     CreateTurnResponse,
     JobStatus,
+    ReplayTurnRequest,
     SessionResponse,
+    SwitchTurnRequest,
     TurnDetailResponse,
 )
 from image_editor.storage import store
@@ -55,6 +54,7 @@ async def create_turn(session_id: str, req: CreateTurnRequest) -> CreateTurnResp
         session_id=session_id,
         user_instruction=req.instruction,
         parent_turn_id=req.current_turn_id,
+        status=JobStatus.queued.value,
     )
     job_id = store.create_job(session_id=session_id, turn_id=turn.turn_id)
 
@@ -80,13 +80,7 @@ async def undo_turn(session_id: str) -> dict:
     session = store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
-    current = session.get("current_turn_id")
-    if not current:
-        return {"current_turn_id": None}
-    turn = store.get_turn(current)
-    parent_id = turn.parent_turn_id if turn else None
-    if session:
-        session["current_turn_id"] = parent_id
+    parent_id = store.undo(session_id)
     return {"current_turn_id": parent_id}
 
 
@@ -95,7 +89,19 @@ async def redo_turn(session_id: str) -> dict:
     session = store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
-    return {"current_turn_id": session.get("current_turn_id")}
+    return {"current_turn_id": store.redo(session_id)}
+
+
+@app.post("/sessions/{session_id}/switch-current-turn")
+async def switch_current_turn(session_id: str, req: SwitchTurnRequest) -> dict:
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    turn = store.get_turn(req.turn_id)
+    if not turn or turn.session_id != session_id:
+        raise HTTPException(status_code=404, detail="turn not found in session")
+    store.switch_current_turn(session_id, req.turn_id)
+    return {"current_turn_id": req.turn_id}
 
 
 # ---- Job ----
@@ -106,6 +112,24 @@ async def get_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
     return job
+
+
+@app.get("/sessions/{session_id}/model-calls")
+async def list_session_model_calls(session_id: str) -> list[dict]:
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    rows = store.list_model_calls(session_id=session_id)
+    return [r.model_dump() for r in rows]
+
+
+@app.get("/turns/{turn_id}/model-calls")
+async def list_turn_model_calls(turn_id: str) -> list[dict]:
+    turn = store.get_turn(turn_id)
+    if not turn:
+        raise HTTPException(status_code=404, detail="turn not found")
+    rows = store.list_model_calls(turn_id=turn_id)
+    return [r.model_dump() for r in rows]
 
 
 # ---- Execute (Async -- 实际生产应通过 Job Queue) ----
@@ -121,6 +145,7 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
         session_id=session_id,
         user_instruction=req.instruction,
         parent_turn_id=req.current_turn_id or session.get("current_turn_id"),
+        status=JobStatus.running.value,
     )
     job_id = store.create_job(session_id=session_id, turn_id=turn.turn_id)
 
@@ -146,6 +171,66 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
             ),
             reference_image_ids=req.reference_image_ids,
             mask_image_id=req.mask_image_id,
+            turn_id=turn.turn_id,
+        )
+        store.update_job(job_id, status=JobStatus.succeeded.value)
+        store.update_turn(turn.turn_id, status=JobStatus.succeeded.value)
+        return {"job_id": job_id, "turn_id": turn.turn_id, **result}
+    except Exception as e:
+        store.update_job(job_id, status=JobStatus.failed.value, error_message=str(e))
+        store.update_turn(turn.turn_id, status="failed", error_message=str(e))
+        return {"job_id": job_id, "turn_id": turn.turn_id, "error": str(e)}
+
+
+@app.post("/sessions/{session_id}/replay")
+async def replay_turn(session_id: str, req: ReplayTurnRequest) -> dict:
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    source_turn = store.get_turn(req.from_turn_id)
+    if not source_turn or source_turn.session_id != session_id:
+        raise HTTPException(status_code=404, detail="source turn not found")
+
+    parent_turn = store.get_turn(source_turn.parent_turn_id) if source_turn.parent_turn_id else None
+    current_image_id = parent_turn.output_image_id if parent_turn else None
+    current_image_url = (
+        store.get_image(current_image_id).get("url")
+        if current_image_id and store.get_image(current_image_id)
+        else None
+    )
+
+    replay_req = CreateTurnRequest(
+        instruction=source_turn.user_instruction,
+        current_turn_id=source_turn.parent_turn_id,
+        reference_image_ids=source_turn.reference_image_ids,
+        mask_image_id=source_turn.mask_image_id,
+        options={
+            "replay_from_turn_id": source_turn.turn_id,
+            "replay_reason": "manual_replay",
+        },
+    )
+
+    turn = store.create_turn(
+        session_id=session_id,
+        user_instruction=replay_req.instruction,
+        parent_turn_id=replay_req.current_turn_id,
+        status=JobStatus.running.value,
+    )
+    job_id = store.create_job(session_id=session_id, turn_id=turn.turn_id)
+
+    try:
+        result = await run_workflow(
+            user_id=session.get("user_id", "default"),
+            project_id=session["project_id"],
+            session_id=session_id,
+            instruction=replay_req.instruction,
+            current_turn_id=replay_req.current_turn_id,
+            current_image_id=current_image_id,
+            current_image_url=current_image_url,
+            reference_image_ids=replay_req.reference_image_ids,
+            mask_image_id=replay_req.mask_image_id,
+            turn_id=turn.turn_id,
         )
         store.update_job(job_id, status=JobStatus.succeeded.value)
         return {"job_id": job_id, "turn_id": turn.turn_id, **result}

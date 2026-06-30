@@ -18,11 +18,15 @@ class DoubaoImageTool(ImageTool):
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     async def generate(self, request: GenerateRequest) -> GenerateResult:
+        metadata = request.metadata or {}
         resp = await self.client.generate(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
             size=self._parse_size(request.aspect_ratio),
             seed=request.seed,
+            session_id=metadata.get("session_id"),
+            turn_id=metadata.get("turn_id"),
+            purpose=metadata.get("purpose", "image_generate"),
         )
 
         image_data = resp.get("data", [{}])[0]
@@ -39,11 +43,15 @@ class DoubaoImageTool(ImageTool):
         )
 
     async def edit(self, request: EditRequest) -> EditResult:
+        metadata = request.metadata or {}
         resp = await self.client.edit(
             image_url=request.input_image_url,
             prompt=request.prompt,
             mask_url=request.mask_image_url,
             seed=request.seed,
+            session_id=metadata.get("session_id"),
+            turn_id=metadata.get("turn_id"),
+            purpose=metadata.get("purpose", "image_edit"),
         )
 
         image_data = resp.get("data", [{}])[0]
@@ -66,14 +74,19 @@ class DoubaoImageTool(ImageTool):
         prompt: str,
         negative_prompt: str = "",
         seed: int | None = None,
+        metadata: dict | None = None,
     ) -> EditResult:
         """局部修复（inpainting）"""
+        meta = metadata or {}
         resp = await self.client.inpainting(
             image_url=image_url,
             mask_url=mask_url,
             prompt=prompt,
             negative_prompt=negative_prompt,
             seed=seed,
+            session_id=meta.get("session_id"),
+            turn_id=meta.get("turn_id"),
+            purpose=meta.get("purpose", "image_inpaint"),
         )
 
         image_data = resp.get("data", [{}])[0]

@@ -16,6 +16,26 @@
   - Worker 进程消费队列，执行 LangGraph workflow
   - 前端轮询或 WebSocket 推送结果
 
+### P0 实施拆解（字段与接口平移）
+
+- [ ] **Step 1: 固化数据表结构（Postgres）**
+  - 新增/对齐表：`sessions`, `turns`, `images`, `jobs`, `model_calls`
+  - `turns` 必含：`parent_turn_id`, `input_image_id`, `output_image_id`, `mask_image_id`, `reference_image_ids`, `selected_tool`, `model_provider`, `model_name`, `model_params`, `qa_result`
+  - `sessions` 增加版本指针字段（至少 `current_turn_id`，以及 redo 所需结构）
+- [ ] **Step 2: Repository 层替换 `MemoryStore`**
+  - 保持现有方法签名兼容：`create_turn/update_turn/get_turn/get_session/undo/redo/switch_current_turn/record_model_call`
+  - 关键写路径加事务：`turn` 更新 + `session.current_turn_id` 更新原子提交
+- [ ] **Step 3: 资产存储迁移到 S3/OSS**
+  - `save_image` 改为保存对象存储 URL 和元数据，不再依赖本地 `output/`
+  - `mask`、`result`、`reference` 统一资产类型与 metadata
+- [ ] **Step 4: `/execute` 改成真正异步任务**
+  - API 仅创建 `job + pending turn` 并入队，立即返回 `job_id/turn_id`
+  - Worker 拉取任务后调用 `run_workflow`，完成后写回 `jobs/turns/sessions`
+  - 补齐取消、超时、重试、失败回写逻辑
+- [ ] **Step 5: 接口兼容与验收**
+  - 保持可用接口：`/turns/{id}`, `/sessions/{id}`, `/undo`, `/redo`, `/switch-current-turn`, `/replay`, `/model-calls`
+  - 增加最小回归用例：追踪、回放、回退、可观测 四条主链路
+
 ## P1 尽快做
 
 - [ ] **模型路由升级** — 从硬编码规则改为动态路由，考虑成本、延迟、历史成功率、用户等级

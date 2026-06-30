@@ -88,10 +88,12 @@ class TurnRecord(BaseModel):
     reference_image_ids: list[str] = Field(default_factory=list)
     model_provider: Optional[str] = None
     model_name: Optional[str] = None
+    selected_tool: Optional[str] = None
     model_params: dict = Field(default_factory=dict)
     status: str = "queued"
     qa_score: Optional[float] = None
     qa_passed: Optional[bool] = None
+    qa_result: dict = Field(default_factory=dict)
     error_message: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
@@ -156,13 +158,24 @@ class TurnDetailResponse(BaseModel):
     parent_turn_id: Optional[str] = None
     user_instruction: str
     intent: Optional[str] = None
+    edit_scope: Optional[str] = None
     rewritten_prompt: Optional[str] = None
+    negative_prompt: Optional[str] = None
+    input_image_id: Optional[str] = None
     input_image_url: Optional[str] = None
+    output_image_id: Optional[str] = None
     output_image_url: Optional[str] = None
+    mask_image_id: Optional[str] = None
     mask_image_url: Optional[str] = None
+    reference_image_ids: list[str] = Field(default_factory=list)
+    model_provider: Optional[str] = None
+    model_name: Optional[str] = None
+    selected_tool: Optional[str] = None
+    model_params: dict = Field(default_factory=dict)
     status: str
     qa_score: Optional[float] = None
     qa_passed: Optional[bool] = None
+    qa_result: dict = Field(default_factory=dict)
     error_message: Optional[str] = None
     created_at: str
 
@@ -174,3 +187,28 @@ class SessionResponse(BaseModel):
     turns: list[TurnDetailResponse] = Field(default_factory=list)
     created_at: str
     updated_at: str
+
+
+class SwitchTurnRequest(BaseModel):
+    turn_id: str
+
+
+class ReplayTurnRequest(BaseModel):
+    from_turn_id: str
+
+
+class ModelCallRecord(BaseModel):
+    call_id: str
+    session_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    provider: str
+    model_name: str
+    endpoint: str
+    purpose: str
+    latency_ms: int
+    status: str
+    error_message: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    metadata: dict = Field(default_factory=dict)
+    created_at: str

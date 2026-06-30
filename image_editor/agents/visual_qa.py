@@ -35,6 +35,9 @@ async def visual_qa(state: ImageEditState) -> dict:
     result = await llm.chat_json(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        session_id=state.get("session_id"),
+        turn_id=state.get("turn_id"),
+        purpose="visual_qa",
     )
 
     qa = QAResult(**result)

@@ -72,6 +72,9 @@ async def select_tool(state: ImageEditState) -> dict:
         result = await llm.chat_json(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
+            session_id=state.get("session_id"),
+            turn_id=state.get("turn_id"),
+            purpose="tool_routing",
         )
         selection = ToolSelection(**result)
         return {
