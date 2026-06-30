@@ -34,3 +34,32 @@
 - `/execute` endpoint is synchronous — needs async Job Queue for production.
 - See `image_editor/TODOs.md` for full production migration checklist.
 - The LangGraph workflow is the core orchestrator (`workflow.py`); each agent node is in `agents/`.
+
+## Tooling Notes
+
+### Edit tool Unicode quote matching
+
+The edit tool does exact byte-level string matching. Chinese files in this repo use Unicode curly quotes (`\u201c` \u2014 `U+201C` LEFT DOUBLE QUOTATION MARK, `\u201d` \u2014 `U+201D` RIGHT DOUBLE QUOTATION MARK), not ASCII straight quotes (`"` \u2014 `U+0022`). They look visually identical but differ at the byte level:
+
+| Character | Unicode | UTF-8 bytes |
+|-----------|---------|-------------|
+| ASCII `"` | `U+0022` | `0x22` (1 byte) |
+| Chinese `\u201c` | `U+201C` | `0xE2 0x80 0x9C` (3 bytes) |
+| Chinese `\u201d` | `U+201D` | `0xE2 0x80 0x9D` (3 bytes) |
+
+When the LLM generates the `oldString` parameter, it tends to normalize `\u201c`/`\u201d` into ASCII `"`, causing `oldString not found` errors. The edit tool will report the exact error message but the mismatch is invisible to the eye.
+
+**Fix**: For edits involving Chinese punctuation, use a Python script with explicit `\u` escape sequences.
+
+```bash
+python3 << 'PYEOF'
+with open('/path/to/file.md', 'r') as f:
+    content = f.read()
+old = '目标文本 \u201c包含中文引号\u201d'
+new = '替换文本'
+assert old in content, f"old not found"
+content = content.replace(old, new, 1)
+with open('/path/to/file.md', 'w') as f:
+    f.write(content)
+PYEOF
+```
