@@ -2,15 +2,15 @@
 
 ## P0 必须做
 
-- [ ] **Postgres 存储** — 将 `storage.py` 中的 `MemoryStore` 替换为 Postgres 实现：
+- [x] **Postgres 存储** — 将 `storage.py` 中的 `MemoryStore` 替换为 Postgres 实现：
   - `users`, `projects`, `sessions`, `turns`, `images`, `jobs` 表
   - 版本树查询（`parent_turn_id` 链表、分支遍历）
   - 事务保证 `turn` 写入与 `session.current_turn_id` 更新原子性
-- [ ] **对象存储** — `DoubaoImageTool._download()` 本地保存逻辑替换为 S3 / R2 / OSS：
+- [x] **对象存储** — `DoubaoImageTool._download()` 本地保存逻辑替换为 S3 / R2 / OSS：
   - 原图、结果图、mask、参考图上传
   - 缩略图生成
   - 临时鉴权 URL
-- [ ] **异步 Job Queue** — `/execute` 改为异步：
+- [x] **异步 Job Queue** — `/execute` 改为异步：
   - Redis Queue / Celery / Dramatiq
   - 任务状态机：`queued → running → qa_checking → retrying → succeeded/failed/cancelled`
   - Worker 进程消费队列，执行 LangGraph workflow
@@ -38,21 +38,21 @@
 
 ### P0 实施拆解（字段与接口平移）
 
-- [ ] **Step 1: 固化数据表结构（Postgres）**
+- [x] **Step 1: 固化数据表结构（Postgres）**
   - 新增/对齐表：`sessions`, `turns`, `images`, `jobs`, `model_calls`
   - `turns` 必含：`parent_turn_id`, `input_image_id`, `output_image_id`, `mask_image_id`, `reference_image_ids`, `selected_tool`, `model_provider`, `model_name`, `model_params`, `qa_result`
   - `sessions` 增加版本指针字段（至少 `current_turn_id`，以及 redo 所需结构）
-- [ ] **Step 2: Repository 层替换 `MemoryStore`**
+- [x] **Step 2: Repository 层替换 `MemoryStore`**
   - 保持现有方法签名兼容：`create_turn/update_turn/get_turn/get_session/undo/redo/switch_current_turn/record_model_call`
   - 关键写路径加事务：`turn` 更新 + `session.current_turn_id` 更新原子提交
-- [ ] **Step 3: 资产存储迁移到 S3/OSS**
+- [x] **Step 3: 资产存储迁移到 S3/OSS**
   - `save_image` 改为保存对象存储 URL 和元数据，不再依赖本地 `output/`
   - `mask`、`result`、`reference` 统一资产类型与 metadata
-- [ ] **Step 4: `/execute` 改成真正异步任务**
+- [x] **Step 4: `/execute` 改成真正异步任务**
   - API 仅创建 `job + pending turn` 并入队，立即返回 `job_id/turn_id`
   - Worker 拉取任务后调用 `run_workflow`，完成后写回 `jobs/turns/sessions`
   - 补齐取消、超时、重试、失败回写逻辑
-- [ ] **Step 5: 接口兼容与验收**
+- [x] **Step 5: 接口兼容与验收**
   - 保持可用接口：`/turns/{id}`, `/sessions/{id}`, `/undo`, `/redo`, `/switch-current-turn`, `/replay`, `/model-calls`
   - 增加最小回归用例：追踪、回放、回退、可观测 四条主链路
 
@@ -60,21 +60,21 @@
 
 ### A. 会直接出问题（数据丢失 / 正确性 bug）
 
-- [ ] **刷新页面丢失所有历史（最严重）** — `frontend/src/hooks/useSession.ts` 每次挂载都 `createSession` 新建 session，session_id 既不存 localStorage 也不进 URL；叠加后端 `MemoryStore` 内存存储，用户刷新浏览器或后端重启即丢失全部编辑历史与版本树。
+- [x] **刷新页面丢失所有历史（最严重）** — `frontend/src/hooks/useSession.ts` 每次挂载都 `createSession` 新建 session，session_id 既不存 localStorage 也不进 URL；叠加后端 `MemoryStore` 内存存储，用户刷新浏览器或后端重启即丢失全部编辑历史与版本树。
   - 修法：session_id 持久化到 localStorage / URL，挂载时优先复用；后端存储落库（见 P0 Postgres）
-- [ ] **Redo 按钮判断错误，点了没反应** — `App.tsx` `canRedo = !!currentTurnId`，但真正 redo 依赖后端 `redo_stack`（`storage.py` redo）。redo_stack 为空时按钮仍可点，返回当前 turn 不变，表现为失灵；`switch_current_turn` 清空 redo_stack，fork 分支后 redo 行为不可预期。
+- [x] **Redo 按钮判断错误，点了没反应** — `App.tsx` `canRedo = !!currentTurnId`，但真正 redo 依赖后端 `redo_stack`（`storage.py` redo）。redo_stack 为空时按钮仍可点，返回当前 turn 不变，表现为失灵；`switch_current_turn` 清空 redo_stack，fork 分支后 redo 行为不可预期。
   - 修法：`GET /sessions/{id}` 返回 `can_redo`（redo_stack 是否非空），前端据此置灰
-- [ ] **同步阻塞 + 无超时 / 无取消** — `/execute` 同步执行（`api.py`），出图数秒~数十秒，前端只显示"处理中…"，不能取消、无进度；HTTP 超时后前端报错但后端仍在跑，job 状态无从查询（`/jobs/{id}` 端点存在但前端从不轮询）。
+- [x] **同步阻塞 + 无超时 / 无取消** — `/execute` 同步执行（`api.py`），出图数秒~数十秒，前端只显示"处理中…"，不能取消、无进度；HTTP 超时后前端报错但后端仍在跑，job 状态无从查询（`/jobs/{id}` 端点存在但前端从不轮询）。
   - 修法：改异步 Job + 前端轮询/WebSocket（见 P0 Job Queue），补充取消与进度
-- [ ] **错误信息是英文原始异常** — safety_check 返回 `instruction blocked by safety check: xxx`（`workflow.py`）；API key 缺失/网络错误直接把 `str(e)` 抛给用户（`api.py` execute_turn）。用户看到技术堆栈式文本。
+- [x] **错误信息是英文原始异常** — safety_check 返回 `instruction blocked by safety check: xxx`（`workflow.py`）；API key 缺失/网络错误直接把 `str(e)` 抛给用户（`api.py` execute_turn）。用户看到技术堆栈式文本。
   - 修法：错误码 + 中文用户提示映射层，敏感词/安全拦截给友好文案
 
 ### B. 基础体验缺失（不方便）
 
-- [ ] **无法下载 / 保存结果图** — `ImageViewer.tsx` 没有下载按钮，用户只能右键另存
-- [ ] **图片无法放大查看** — 生成 2K/4K 图却挤在小面板，无 zoom/pan/全屏，无输入/输出滑动对比
+- [x] **无法下载 / 保存结果图** — `ImageViewer.tsx` 没有下载按钮，用户只能右键另存
+- [x] **图片无法放大查看** — 生成 2K/4K 图却挤在小面板，无 zoom/pan/全屏，无输入/输出滑动对比
 - [ ] **前端不支持 mask 局部编辑和参考图** — 后端 `mask_image_id` / `reference_image_ids` / `inpaint` 已就绪（`doubao_image.py`, `tools/mask.py`），但 `InstructionInput` 只能传一张起始图（与 P2「前端本地 mask 圈选」重复，此处强调后端已具备能力）
-- [ ] **失败后无"重试"按钮** — 后端 `/replay` 已就绪（`api.py`），前端 timeline 只显示 failed（`TurnTimeline.tsx`），用户需手动重打指令
+- [x] **失败后无"重试"按钮** — 后端 `/replay` 已就绪（`api.py`），前端 timeline 只显示 failed（`TurnTimeline.tsx`），用户需手动重打指令
 - [ ] **无用户 / 鉴权 / 配额** — user_id 硬编码 `"default"`（`api.py`），多人共享命名空间，付费模型无限调用（与 P2「用户鉴权与配额」呼应）
 
 > **建议优先级**：先补 A-1（session 持久化，防数据丢失）与 B-1/B-2（下载 + 放大，修图工具最基本诉求）。

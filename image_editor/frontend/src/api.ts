@@ -61,6 +61,16 @@ export interface ExecuteResult {
   error?: string;
 }
 
+export interface JobDetail {
+  job_id: string;
+  session_id: string;
+  turn_id: string;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface SessionRecord {
   session_id: string;
   project_id: string;
@@ -143,5 +153,16 @@ export function replayTurn(
       method: "POST",
       body: JSON.stringify({ from_turn_id: fromTurnId }),
     }
+  );
+}
+
+export function getJob(jobId: string): Promise<JobDetail> {
+  return request<JobDetail>(`/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function cancelJob(jobId: string): Promise<{ job_id: string; status: string }> {
+  return request<{ job_id: string; status: string }>(
+    `/jobs/${encodeURIComponent(jobId)}/cancel`,
+    { method: "POST" }
   );
 }

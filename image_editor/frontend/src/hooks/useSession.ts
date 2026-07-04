@@ -6,6 +6,8 @@ import {
   undoTurn as apiUndo,
   redoTurn as apiRedo,
   replayTurn as apiReplay,
+  getJob,
+  cancelJob,
   ExecuteResult,
   SessionResponse,
   TurnDetail,
@@ -123,12 +125,46 @@ export function useSession() {
           current_turn_id: state.currentTurnId ?? undefined,
           uploaded_image_id: uploadedImageId ?? undefined,
         });
-        setState((prev) => ({
-          ...prev,
-          uploadedImageId: null,
-          uploadedImageUrl: null,
-        }));
-        await refresh(sid);
+        
+        // 如果返回了job_id，开始轮询job状态
+        if (result.job_id) {
+          const pollJob = async () => {
+            try {
+              const job = await getJob(result.job_id);
+              if (job.status === "succeeded" || job.status === "failed") {
+                // job完成，刷新session数据
+                setState((prev) => ({
+                  ...prev,
+                  uploadedImageId: null,
+                  uploadedImageUrl: null,
+                }));
+                await refresh(sid);
+                return;
+              }
+              // 继续轮询
+              setTimeout(pollJob, 1000);
+            } catch {
+              // 轮询出错，停止轮询并刷新
+              setState((prev) => ({
+                ...prev,
+                uploadedImageId: null,
+                uploadedImageUrl: null,
+              }));
+              await refresh(sid);
+            }
+          };
+          // 开始轮询
+          setTimeout(pollJob, 1000);
+        } else {
+          // 没有job_id（同步执行），直接刷新
+          setState((prev) => ({
+            ...prev,
+            uploadedImageId: null,
+            uploadedImageUrl: null,
+          }));
+          await refresh(sid);
+        }
+        
         return result;
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : "Unknown error";
@@ -183,7 +219,34 @@ export function useSession() {
       setState((prev) => ({ ...prev, loading: true, error: null }));
       try {
         const result = await apiReplay(sid, turnId);
-        await refresh(sid);
+        
+        // 如果返回了job_id，开始轮询job状态
+        if (result.job_id) {
+          const pollJob = async () => {
+            try {
+              const job = await getJob(result.job_id);
+              if (job.status === "succeeded" || job.status === "failed") {
+                // job完成，刷新session数据
+                await refresh(sid);
+                if (result.error) {
+                  setState((prev) => ({ ...prev, error: result.error ?? null }));
+                }
+                return;
+              }
+              // 继续轮询
+              setTimeout(pollJob, 1000);
+            } catch {
+              // 轮询出错，停止轮询并刷新
+              await refresh(sid);
+            }
+          };
+          // 开始轮询
+          setTimeout(pollJob, 1000);
+        } else {
+          // 没有job_id（同步执行），直接刷新
+          await refresh(sid);
+        }
+        
         if (result.error) {
           setState((prev) => ({ ...prev, error: result.error ?? null }));
         }
@@ -220,5 +283,24 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, undo, redo, retry };
+  const cancelExecution = useCallback(
+    async (jobId: string): Promise<void> => {
+      try {
+        await cancelJob(jobId);
+        // 取消成功后刷新session状态
+        const sid = sessionIdRef.current;
+        if (sid) {
+          await refresh(sid);
+        }
+      } catch (e: unknown) {
+        setState((prev) => ({
+          ...prev,
+          error: e instanceof Error ? e.message : "Cancel failed",
+        }));
+      }
+    },
+    [refresh]
+  );
+
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, undo, redo, retry, cancelExecution };
 }

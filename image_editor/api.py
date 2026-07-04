@@ -132,6 +132,32 @@ async def get_job(job_id: str) -> dict:
     return job
 
 
+@app.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str) -> dict:
+    """取消一个正在运行或排队的Job。"""
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    
+    # 只能取消 queued 或 running 状态的 job
+    if job.status not in [JobStatus.queued.value, JobStatus.running.value]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel job with status: {job.status}"
+        )
+    
+    # 更新 job 状态为 cancelled
+    store.update_job(job_id, status=JobStatus.cancelled.value)
+    
+    # 同时更新对应的 turn 状态
+    turn = store.get_turn(job.turn_id)
+    if turn:
+        store.update_turn(job.turn_id, status=JobStatus.cancelled.value)
+    
+    logger.info("cancel_job: job=%s turn=%s", job_id, job.turn_id)
+    return {"job_id": job_id, "status": JobStatus.cancelled.value}
+
+
 @app.get("/sessions/{session_id}/model-calls")
 async def list_session_model_calls(session_id: str) -> list[dict]:
     session = store.get_session(session_id)
