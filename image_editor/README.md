@@ -6,6 +6,8 @@
 
 - Python >= 3.11
 - Node.js >= 18
+- PostgreSQL >= 14
+- Redis >= 6
 - 包管理二选一：[UV](https://docs.astral.sh/uv/) 或 [pyenv](https://github.com/pyenv/pyenv)
 
 ## Python 环境（pyenv，可选）
@@ -22,6 +24,37 @@ pyenv virtualenv 3.11.9 image-editor
 pyenv local image-editor    # 自动激活该虚拟环境
 ```
 
+## 安装 PostgreSQL
+
+```bash
+# Ubuntu/Debian
+sudo apt update && sudo apt install postgresql postgresql-client
+
+# 启动服务
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
+
+# 创建数据库（注意：postgres 用户无权访问你的家目录，需切换到 /tmp 执行）
+cd /tmp && sudo -u postgres createdb image_editor
+
+# 设置密码
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'your_password';"
+```
+
+## 安装 Redis
+
+```bash
+# Ubuntu/Debian
+sudo apt install redis-server
+sudo systemctl start redis
+
+# 或使用 Docker（推荐）
+docker run -d --name redis -p 6379:6379 redis:7
+
+# 验证
+redis-cli ping  # 应返回 PONG
+```
+
 ## 环境变量
 
 | 变量 | 说明 | 必需 |
@@ -31,7 +64,20 @@ pyenv local image-editor    # 自动激活该虚拟环境
 | `DOUBAO_MODEL` | 豆包模型名（默认 `doubao-seedream-5-0-260128`） | 否 |
 | `IMAGE_PROVIDER` | 图片生成供应商（默认 `doubao`） | 否 |
 | `IMAGE_OUTPUT_DIR` | 图片输出目录（默认 `./output`） | 否 |
+| `DATABASE_URL` | PostgreSQL 连接串 | 是 |
+| `REDIS_URL` | Redis 连接串（默认 `redis://localhost:6379/0`） | 否 |
 | `DEBUG` | 调试模式 | 否 |
+
+## 初始化数据库
+
+```bash
+# 复制环境变量模板并填写密码
+cp .env.example .env
+
+# 创建数据库表（需切换到 /tmp 执行，否则 postgres 用户无权访问家目录）
+cp schema.sql /tmp/
+sudo -u postgres psql -d image_editor -f /tmp/schema.sql
+```
 
 ## 安装依赖
 
