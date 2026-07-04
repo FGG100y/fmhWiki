@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from datetime import datetime
@@ -12,6 +13,8 @@ from openai import AsyncOpenAI
 from image_editor.config import config
 from image_editor.models import ModelCallRecord
 from image_editor.storage import store
+
+logger = logging.getLogger(__name__)
 
 
 class DoubaoLLM:
@@ -127,50 +130,62 @@ class DoubaoLLM:
 
 
 class DoubaoImageClient:
-    """豆包 / 火山引擎 图片生成客户端 (ARK Image API)"""
+    """豆包 / 火山引擎 图片生成客户端 (ARK Image API)
+    统一使用 DOUBAO_MODEL (Seedream 5.0) 作为多模态模型。
+    """
 
     def __init__(self) -> None:
         cfg = config.doubao
         self.api_key = cfg.api_key
-        self.base_url = cfg.base_url.rstrip("/v3").rstrip("/")
+        self.model = cfg.model
         self.http = httpx.AsyncClient(
-            base_url=self.base_url,
+            base_url=cfg.base_url,
             headers={"Authorization": f"Bearer {self.api_key}"},
             timeout=cfg.request_timeout,
         )
+
+    def _base_body(
+        self, prompt: str, size: str, image_url: str = "", mask_url: str = ""
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "size": size,
+            "sequential_image_generation": "disabled",
+            "response_format": "url",
+            "stream": False,
+            "watermark": True,
+        }
+        if image_url:
+            body["image"] = image_url
+        if mask_url:
+            body["mask"] = mask_url
+        return body
 
     async def generate(
         self,
         prompt: str,
         negative_prompt: str = "",
-        size: str = "1024x1024",
-        n: int = 1,
+        size: str = "2K",
         seed: Optional[int] = None,
         session_id: Optional[str] = None,
         turn_id: Optional[str] = None,
         purpose: str = "image_generate",
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": "seed-xx-large",
-            "prompt": prompt,
-            "size": size,
-            "n": n,
-        }
-        if negative_prompt:
-            body["negative_prompt"] = negative_prompt
-        if seed is not None:
-            body["seed"] = seed
+        body = self._base_body(prompt, size)
 
         start = time.monotonic()
         status = "succeeded"
         error_message = None
         try:
-            resp = await self.http.post("/api/v3/images/generations", json=body)
+            logger.debug("images/generations (create): model=%s", self.model)
+            resp = await self.http.post("images/generations", json=body)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
             status = "failed"
             error_message = str(exc)
+            logger.error("images/generations failed: %s", exc)
             raise
         finally:
             store.record_model_call(
@@ -179,14 +194,14 @@ class DoubaoImageClient:
                     session_id=session_id,
                     turn_id=turn_id,
                     provider="doubao",
-                    model_name="seed-xx-large",
+                    model_name=self.model,
                     endpoint="images/generations",
                     purpose=purpose,
                     latency_ms=int((time.monotonic() - start) * 1000),
                     status=status,
                     error_message=error_message,
                     created_at=datetime.utcnow().isoformat(),
-                    metadata={"size": size, "seed": seed, "n": n},
+                    metadata={"size": size, "seed": seed},
                 )
             )
 
@@ -195,33 +210,32 @@ class DoubaoImageClient:
         image_url: str,
         prompt: str,
         mask_url: Optional[str] = None,
-        size: str = "1024x1024",
+        size: str = "2K",
         seed: Optional[int] = None,
         session_id: Optional[str] = None,
         turn_id: Optional[str] = None,
         purpose: str = "image_edit",
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": "seed-xx-large-edit",
-            "image": image_url,
-            "prompt": prompt,
-            "size": size,
-        }
-        if mask_url:
-            body["mask"] = mask_url
-        if seed is not None:
-            body["seed"] = seed
+        body = self._base_body(
+            prompt, size, image_url=image_url, mask_url=mask_url or ""
+        )
 
         start = time.monotonic()
         status = "succeeded"
         error_message = None
         try:
-            resp = await self.http.post("/api/v3/images/edits", json=body)
+            logger.debug(
+                "images/generations (edit): model=%s has_image=%s",
+                self.model,
+                bool(image_url),
+            )
+            resp = await self.http.post("images/generations", json=body)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
             status = "failed"
             error_message = str(exc)
+            logger.error("images/generations (edit) failed: %s", exc)
             raise
         finally:
             store.record_model_call(
@@ -230,8 +244,8 @@ class DoubaoImageClient:
                     session_id=session_id,
                     turn_id=turn_id,
                     provider="doubao",
-                    model_name="seed-xx-large-edit",
-                    endpoint="images/edits",
+                    model_name=self.model,
+                    endpoint="images/generations",
                     purpose=purpose,
                     latency_ms=int((time.monotonic() - start) * 1000),
                     status=status,
@@ -252,28 +266,20 @@ class DoubaoImageClient:
         turn_id: Optional[str] = None,
         purpose: str = "image_inpaint",
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": "seed-xx-large-inpaint",
-            "image": image_url,
-            "mask": mask_url,
-            "prompt": prompt,
-            "size": "1024x1024",
-        }
-        if negative_prompt:
-            body["negative_prompt"] = negative_prompt
-        if seed is not None:
-            body["seed"] = seed
+        body = self._base_body(prompt, "2K", image_url=image_url, mask_url=mask_url)
 
         start = time.monotonic()
         status = "succeeded"
         error_message = None
         try:
-            resp = await self.http.post("/api/v3/images/inpainting", json=body)
+            logger.debug("images/generations (inpaint): model=%s", self.model)
+            resp = await self.http.post("images/generations", json=body)
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
             status = "failed"
             error_message = str(exc)
+            logger.error("images/generations (inpaint) failed: %s", exc)
             raise
         finally:
             store.record_model_call(
@@ -282,8 +288,8 @@ class DoubaoImageClient:
                     session_id=session_id,
                     turn_id=turn_id,
                     provider="doubao",
-                    model_name="seed-xx-large-inpaint",
-                    endpoint="images/inpainting",
+                    model_name=self.model,
+                    endpoint="images/generations",
                     purpose=purpose,
                     latency_ms=int((time.monotonic() - start) * 1000),
                     status=status,

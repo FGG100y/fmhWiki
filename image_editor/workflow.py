@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 
-from image_editor.agents.intent import classify_intent
-from image_editor.agents.prompt import rewrite_prompt
-from image_editor.agents.router import select_tool
 from image_editor.agents.visual_qa import (
     route_by_qa,
     visual_qa,
 )
+from image_editor.config import config
+from image_editor.models import EditRequest, GenerateRequest, Intent
 from image_editor.state import ImageEditState, create_initial_state
 from image_editor.storage import store
 from image_editor.tools.base import registry
-from image_editor.tools.mask import MaskGenerationTool
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +29,11 @@ async def load_session(state: ImageEditState) -> dict:
         current_turn = store.get_turn(current_turn_id)
         if current_turn:
             current_image_id = current_turn.output_image_id
-            image = store.get_image(current_turn.output_image_id or "") if current_turn.output_image_id else None
+            image = (
+                store.get_image(current_turn.output_image_id or "")
+                if current_turn.output_image_id
+                else None
+            )
             current_image_url = image.get("url") if image else None
     return {
         "current_turn_id": current_turn_id,
@@ -43,9 +44,16 @@ async def load_session(state: ImageEditState) -> dict:
 
 async def safety_check(state: ImageEditState) -> dict:
     instruction = state.get("user_instruction", "")
+    logger.info("safety_check: instruction=%s", instruction[:80])
     blocked_keywords = [
-        "naked", "nude", "nsfw", "sex", "porn",
-        "暴力", "色情", "裸露",
+        "naked",
+        "nude",
+        "nsfw",
+        "sex",
+        "porn",
+        "暴力",
+        "色情",
+        "裸露",
     ]
     for kw in blocked_keywords:
         if kw in instruction.lower():
@@ -53,100 +61,74 @@ async def safety_check(state: ImageEditState) -> dict:
     return {}
 
 
-async def handle_version_op(state: ImageEditState) -> dict:
-    intent = state.get("intent", "")
-    session = store.get_session(state["session_id"])
-    if not session:
-        return {"error": "session not found"}
-
-    if intent in ("undo", "撤销"):
-        parent = store.undo(state["session_id"])
-        return {"current_turn_id": parent, "current_image_id": None}
-
-    if intent in ("redo", "重做"):
-        redone = store.redo(state["session_id"])
-        return {"current_turn_id": redone}
-
-    return {}
-
-
 async def run_image_tool(state: ImageEditState) -> dict:
-    tool_name = state.get("selected_tool")
-    if not tool_name:
-        return {"error": "no tool selected"}
+    """单模型透传：无当前图 → 文生图；有当前图 → 图生图。
 
-    if tool_name == "mask_generation":
-        tool = MaskGenerationTool()
-        mask_url = await tool.create_blank_mask(
-            image_url=state.get("current_image_url", ""),
-        )
-        mask_image_id = f"img_{uuid.uuid4().hex[:12]}"
-        store.save_image(mask_image_id, mask_url, metadata={"asset_type": "mask"})
-        return {
-            "mask_image_id": mask_image_id,
-            "mask_image_url": mask_url,
-            "selected_tool": "doubao_inpaint",
-        }
+    seedream 是多模态模型，直接理解自然语言指令，无需意图识别 / prompt 改写 /
+    工具路由。mask 与参考图作为多模态输入透传给同一个 images/generations 端点。
+    """
+    image_url = state.get("current_image_url") or ""
+    prompt = state.get("user_instruction", "")
+    mask_url = state.get("mask_image_url")
+    model = config.doubao.model
 
-    if tool_name not in ("doubao_generate", "doubao_edit", "doubao_inpaint"):
-        return {"error": f"unsupported tool: {tool_name}"}
+    if config.image_tool.provider == "doubao" and not config.doubao.api_key:
+        raise RuntimeError("missing API key: ARK_API_KEY 未配置")
 
-    tool = registry.get(tool_name)
-    image_url = state.get("current_image_url", "")
+    metadata = {
+        "session_id": state.get("session_id"),
+        "turn_id": state.get("turn_id"),
+    }
 
-    from image_editor.models import EditRequest, GenerateRequest
-
-    if tool_name == "doubao_generate":
+    if not image_url:
+        logger.info("run_image_tool: text-to-image")
+        tool = registry.get("doubao_generate")
         req = GenerateRequest(
-            prompt=state.get("rewritten_prompt", state["user_instruction"]),
-            negative_prompt=state.get("negative_prompt", ""),
-            aspect_ratio=state.get("model_params", {}).get("size", "1:1"),
-            seed=state.get("model_params", {}).get("seed"),
-            metadata={
-                "session_id": state.get("session_id"),
-                "turn_id": state.get("turn_id"),
-                "purpose": "image_generate",
-            },
+            prompt=prompt,
+            aspect_ratio="2K",
+            metadata={**metadata, "purpose": "image_generate"},
         )
         result = await tool.generate(req)
+        intent = Intent.generate_image.value
+        selected_tool = "doubao_generate"
     else:
+        logger.info("run_image_tool: image-to-image has_mask=%s", bool(mask_url))
+        tool = registry.get("doubao_edit")
         req = EditRequest(
             input_image_url=image_url,
-            prompt=state.get("rewritten_prompt", state["user_instruction"]),
-            negative_prompt=state.get("negative_prompt", ""),
-            mask_image_url=state.get("mask_image_url"),
-            reference_image_urls=[],
-            strength=state.get("model_params", {}).get("strength"),
-            metadata={
-                "session_id": state.get("session_id"),
-                "turn_id": state.get("turn_id"),
-                "purpose": "image_edit",
-            },
+            prompt=prompt,
+            mask_image_url=mask_url,
+            metadata={**metadata, "purpose": "image_edit"},
         )
-        if tool_name == "doubao_inpaint" and hasattr(tool, "inpaint"):
-            result = await tool.inpaint(
-                image_url=image_url,
-                mask_url=state.get("mask_image_url", ""),
-                prompt=req.prompt,
-                negative_prompt=req.negative_prompt or "",
-                metadata={
-                    "session_id": state.get("session_id"),
-                    "turn_id": state.get("turn_id"),
-                    "purpose": "image_inpaint",
-                },
-            )
-        else:
-            result = await tool.edit(req)
+        result = await tool.edit(req)
+        intent = Intent.edit_image.value
+        selected_tool = "doubao_edit"
 
+    logger.info(
+        "run_image_tool: done, image_id=%s has_input_image=%s",
+        result.image_id,
+        bool(image_url),
+    )
     return {
         "output_image_id": result.image_id,
         "output_image_url": result.image_url,
+        "intent": intent,
+        "selected_tool": selected_tool,
+        "model_provider": "doubao",
+        "model_name": model,
+        "model_params": {"size": "2K"},
     }
 
 
 async def persist_turn(state: ImageEditState) -> dict:
     qa = state.get("qa_result") or {}
     turn_id = state.get("turn_id", "")
+    logger.info(
+        "persist_turn: turn_id=%s intent=%s status=%s",
+        turn_id,
+        state.get("intent"),
+        "succeeded" if not state.get("error") else "failed",
+    )
     turn = store.update_turn(
         turn_id,
         intent=state.get("intent"),
@@ -192,15 +174,10 @@ async def fail(state: ImageEditState) -> dict:
     return {}
 
 
-def route_by_intent(
-    state: ImageEditState,
-) -> Literal["version_op", "image_op", "fail"]:
-    op = state.get("operation")
+def route_after_safety(state: ImageEditState) -> Literal["run_image_tool", "fail"]:
     if state.get("error"):
         return "fail"
-    if op == "version_op":
-        return "version_op"
-    return "image_op"
+    return "run_image_tool"
 
 
 def build_workflow() -> StateGraph:
@@ -208,10 +185,6 @@ def build_workflow() -> StateGraph:
 
     workflow.add_node("load_session", load_session)
     workflow.add_node("safety_check", safety_check)
-    workflow.add_node("classify_intent", classify_intent)
-    workflow.add_node("handle_version_op", handle_version_op)
-    workflow.add_node("rewrite_prompt", rewrite_prompt)
-    workflow.add_node("select_tool", select_tool)
     workflow.add_node("run_image_tool", run_image_tool)
     workflow.add_node("visual_qa", visual_qa)
     workflow.add_node("persist_turn", persist_turn)
@@ -219,20 +192,16 @@ def build_workflow() -> StateGraph:
 
     workflow.set_entry_point("load_session")
     workflow.add_edge("load_session", "safety_check")
-    workflow.add_edge("safety_check", "classify_intent")
 
     workflow.add_conditional_edges(
-        "classify_intent",
-        route_by_intent,
+        "safety_check",
+        route_after_safety,
         {
-            "version_op": "handle_version_op",
-            "image_op": "rewrite_prompt",
+            "run_image_tool": "run_image_tool",
             "fail": "fail",
         },
     )
 
-    workflow.add_edge("rewrite_prompt", "select_tool")
-    workflow.add_edge("select_tool", "run_image_tool")
     workflow.add_edge("run_image_tool", "visual_qa")
 
     workflow.add_conditional_edges(
@@ -240,12 +209,11 @@ def build_workflow() -> StateGraph:
         route_by_qa,
         {
             "pass": "persist_turn",
-            "retry": "rewrite_prompt",
+            "retry": "run_image_tool",
             "fail": "persist_turn",
         },
     )
 
-    workflow.add_edge("handle_version_op", END)
     workflow.add_edge("persist_turn", END)
     workflow.add_edge("fail", END)
 

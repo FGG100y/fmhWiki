@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+import base64
+import io
+import logging
+import uuid
+from pathlib import Path
 
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from PIL import Image as PILImage
+
+from image_editor.config import config
+from image_editor.errors import to_user_error
 from image_editor.models import (
     CreateTurnRequest,
     CreateTurnResponse,
@@ -11,9 +21,13 @@ from image_editor.models import (
     SessionResponse,
     SwitchTurnRequest,
     TurnDetailResponse,
+    UploadResponse,
 )
 from image_editor.storage import store
 from image_editor.workflow import run_workflow
+
+logger = logging.getLogger(__name__)
+
 
 app = FastAPI(title="多轮修图 Agent API", version="0.1.0")
 
@@ -27,6 +41,7 @@ app.add_middleware(
 
 
 # ---- Session ----
+
 
 @app.post("/projects/{project_id}/sessions")
 async def create_session(project_id: str, user_id: str = "default") -> dict:
@@ -43,6 +58,7 @@ async def get_session(session_id: str) -> SessionResponse:
 
 
 # ---- Turn / Edit ----
+
 
 @app.post("/sessions/{session_id}/turns", response_model=CreateTurnResponse)
 async def create_turn(session_id: str, req: CreateTurnRequest) -> CreateTurnResponse:
@@ -75,6 +91,7 @@ async def get_turn(turn_id: str) -> TurnDetailResponse:
 
 # ---- Undo / Redo ----
 
+
 @app.post("/sessions/{session_id}/undo")
 async def undo_turn(session_id: str) -> dict:
     session = store.get_session(session_id)
@@ -106,6 +123,7 @@ async def switch_current_turn(session_id: str, req: SwitchTurnRequest) -> dict:
 
 # ---- Job ----
 
+
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str) -> dict:
     job = store.get_job(job_id)
@@ -132,54 +150,190 @@ async def list_turn_model_calls(turn_id: str) -> list[dict]:
     return [r.model_dump() for r in rows]
 
 
-# ---- Execute (Async -- 实际生产应通过 Job Queue) ----
+# ---- Upload ----
+
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+UPLOAD_MAX_SIZE = 1 * 1024 * 1024  # 1MB
+UPLOAD_MAX_DIMENSION = 2048
+
+
+def _compress_image(content: bytes, ext: str) -> tuple[bytes, str, str, int, int]:
+    """按需压缩图片，返回 (final_bytes, mime_type, final_ext, width, height)"""
+    img = PILImage.open(io.BytesIO(content))
+    width, height = img.size
+
+    # 小图片（< 1MB）→ 不压缩，保持原格式
+    if len(content) < UPLOAD_MAX_SIZE:
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+        }.get(ext, "image/png")
+        return content, mime, ext, width, height
+
+    logger.info("compressing large image: original_size=%dKB", len(content) // 1024)
+
+    # 大图片 → 压缩
+    if width > UPLOAD_MAX_DIMENSION or height > UPLOAD_MAX_DIMENSION:
+        ratio = min(UPLOAD_MAX_DIMENSION / width, UPLOAD_MAX_DIMENSION / height)
+        new_w, new_h = int(width * ratio), int(height * ratio)
+        img = img.resize((new_w, new_h), PILImage.LANCZOS)
+        width, height = new_w, new_h
+
+    buf = io.BytesIO()
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    img.save(buf, format="JPEG", quality=85)
+    compressed = buf.getvalue()
+
+    logger.info(
+        "compressed: %dx%d, final_size=%dKB",
+        width,
+        height,
+        len(compressed) // 1024,
+    )
+    return compressed, "image/jpeg", ".jpg", width, height
+
+
+@app.post("/upload", response_model=UploadResponse)
+async def upload_image(file: UploadFile = File(...), request: Request = None):
+    ext = Path(file.filename or "image.png").suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported file type: {ext}, allowed: {ALLOWED_EXTENSIONS}",
+        )
+
+    raw_content = await file.read()
+
+    try:
+        final_content, mime, final_ext, width, height = _compress_image(
+            raw_content, ext
+        )
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid image file")
+
+    image_id = f"img_{uuid.uuid4().hex[:12]}"
+    local_filename = f"{image_id}{final_ext}"
+    local_path = _upload_dir / local_filename
+    local_path.write_bytes(final_content)
+
+    encoded = base64.b64encode(final_content).decode("ascii")
+    image_url = f"data:{mime};base64,{encoded}"
+
+    store.save_image(
+        image_id,
+        image_url,
+        metadata={
+            "asset_type": "upload",
+            "filename": file.filename,
+            "width": width,
+            "height": height,
+            "local_url": f"/uploads/{local_filename}",
+        },
+    )
+
+    logger.info(
+        "upload_image: id=%s filename=%s size=%dx%d mime=%s",
+        image_id,
+        file.filename,
+        width,
+        height,
+        mime,
+    )
+    return UploadResponse(
+        image_id=image_id,
+        image_url=image_url,
+        filename=file.filename or "",
+        width=width,
+        height=height,
+    )
+
+
+# ---- Execute (Async -- Job Queue) ----
+
 
 @app.post("/sessions/{session_id}/execute")
 async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
-    """同步执行工作流（开发/演示用）。生产环境应异步调用。"""
+    """异步执行工作流 — 创建 job 入队，立即返回 job_id/turn_id。"""
+    logger.info(
+        "execute_turn: session=%s instruction=%s", session_id, req.instruction[:80]
+    )
     session = store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
+
+    # 首次上传图片时，创建根 turn 代表原始图，使其出现在编辑历史中
+    if req.uploaded_image_id and not session.get("current_turn_id"):
+        uploaded_img = store.get_image(req.uploaded_image_id)
+        if not uploaded_img:
+            raise HTTPException(status_code=404, detail="uploaded image not found")
+        root_turn = store.create_turn(
+            session_id=session_id,
+            user_instruction="[原图]",
+            parent_turn_id=None,
+            status=JobStatus.succeeded.value,
+        )
+        store.update_turn(
+            root_turn.turn_id,
+            input_image_id=req.uploaded_image_id,
+            output_image_id=req.uploaded_image_id,
+        )
+        store.switch_current_turn(session_id, root_turn.turn_id)
 
     turn = store.create_turn(
         session_id=session_id,
         user_instruction=req.instruction,
         parent_turn_id=req.current_turn_id or session.get("current_turn_id"),
-        status=JobStatus.running.value,
+        status=JobStatus.queued.value,
     )
     job_id = store.create_job(session_id=session_id, turn_id=turn.turn_id)
 
-    # 获取当前图片信息
-    current_turn = None
-    if req.current_turn_id:
-        current_turn = store.get_turn(req.current_turn_id)
-    elif session.get("current_turn_id"):
-        current_turn = store.get_turn(session["current_turn_id"])
-
-    try:
-        result = await run_workflow(
-            user_id=session.get("user_id", "default"),
-            project_id=session["project_id"],
-            session_id=session_id,
-            instruction=req.instruction,
-            current_turn_id=turn.parent_turn_id,
-            current_image_id=current_turn.output_image_id if current_turn else None,
-            current_image_url=(
-                store.get_image(current_turn.output_image_id or "").get("url")
-                if current_turn and current_turn.output_image_id
-                else None
-            ),
-            reference_image_ids=req.reference_image_ids,
-            mask_image_id=req.mask_image_id,
-            turn_id=turn.turn_id,
+    # 确定当前图片：上传图片优先，否则用上一轮的输出
+    if req.uploaded_image_id:
+        uploaded_img = store.get_image(req.uploaded_image_id)
+        if not uploaded_img:
+            raise HTTPException(status_code=404, detail="uploaded image not found")
+        current_image_id = req.uploaded_image_id
+        current_image_url = uploaded_img.get("url", "")
+    else:
+        current_turn = None
+        if req.current_turn_id:
+            current_turn = store.get_turn(req.current_turn_id)
+        elif session.get("current_turn_id"):
+            current_turn = store.get_turn(session["current_turn_id"])
+        current_image_id = current_turn.output_image_id if current_turn else None
+        current_image_url = (
+            store.get_image(current_turn.output_image_id or "").get("url")
+            if current_turn and current_turn.output_image_id
+            else None
         )
-        store.update_job(job_id, status=JobStatus.succeeded.value)
-        store.update_turn(turn.turn_id, status=JobStatus.succeeded.value)
-        return {"job_id": job_id, "turn_id": turn.turn_id, **result}
-    except Exception as e:
-        store.update_job(job_id, status=JobStatus.failed.value, error_message=str(e))
-        store.update_turn(turn.turn_id, status="failed", error_message=str(e))
-        return {"job_id": job_id, "turn_id": turn.turn_id, "error": str(e)}
+
+    # 入队异步任务
+    from image_editor.worker import execute_workflow
+
+    execute_workflow.send(
+        session_id=session_id,
+        turn_id=turn.turn_id,
+        job_id=job_id,
+        user_id=session.get("user_id", "default"),
+        project_id=session["project_id"],
+        instruction=req.instruction,
+        current_turn_id=turn.parent_turn_id,
+        current_image_id=current_image_id,
+        current_image_url=current_image_url,
+        reference_image_ids=req.reference_image_ids,
+        mask_image_id=req.mask_image_id,
+    )
+
+    logger.info("execute_turn: queued job=%s turn=%s", job_id, turn.turn_id)
+    return {
+        "job_id": job_id,
+        "turn_id": turn.turn_id,
+        "status": JobStatus.queued.value,
+    }
 
 
 @app.post("/sessions/{session_id}/replay")
@@ -192,7 +346,11 @@ async def replay_turn(session_id: str, req: ReplayTurnRequest) -> dict:
     if not source_turn or source_turn.session_id != session_id:
         raise HTTPException(status_code=404, detail="source turn not found")
 
-    parent_turn = store.get_turn(source_turn.parent_turn_id) if source_turn.parent_turn_id else None
+    parent_turn = (
+        store.get_turn(source_turn.parent_turn_id)
+        if source_turn.parent_turn_id
+        else None
+    )
     current_image_id = parent_turn.output_image_id if parent_turn else None
     current_image_url = (
         store.get_image(current_image_id).get("url")
@@ -232,9 +390,40 @@ async def replay_turn(session_id: str, req: ReplayTurnRequest) -> dict:
             mask_image_id=replay_req.mask_image_id,
             turn_id=turn.turn_id,
         )
+        if result.get("error"):
+            code, friendly = to_user_error(result["error"])
+            store.update_job(
+                job_id, status=JobStatus.failed.value, error_message=result["error"]
+            )
+            store.update_turn(turn.turn_id, status="failed", error_message=friendly)
+            return {
+                "job_id": job_id,
+                "turn_id": turn.turn_id,
+                "error_code": code,
+                "error": friendly,
+            }
         store.update_job(job_id, status=JobStatus.succeeded.value)
         return {"job_id": job_id, "turn_id": turn.turn_id, **result}
     except Exception as e:
+        code, friendly = to_user_error(str(e))
         store.update_job(job_id, status=JobStatus.failed.value, error_message=str(e))
-        store.update_turn(turn.turn_id, status="failed", error_message=str(e))
-        return {"job_id": job_id, "turn_id": turn.turn_id, "error": str(e)}
+        store.update_turn(turn.turn_id, status="failed", error_message=friendly)
+        return {
+            "job_id": job_id,
+            "turn_id": turn.turn_id,
+            "error_code": code,
+            "error": friendly,
+        }
+
+
+_output_dir = Path(config.image_tool.output_dir)
+_output_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/output", StaticFiles(directory=str(_output_dir)), name="output")
+
+_upload_dir = Path(config.image_tool.upload_dir)
+_upload_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_upload_dir)), name="uploads")
+
+_frontend_dir = Path(__file__).parent / "frontend" / "dist"
+if _frontend_dir.exists():
+    app.mount("/", StaticFiles(directory=str(_frontend_dir), html=True))

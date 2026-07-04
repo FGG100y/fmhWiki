@@ -1,65 +1,55 @@
 # AGENTS.md
 
-## Repo Structure — Two Zones
+## Architecture
 
-**Root docs** (markdown files at root):
-- `LLM-VLM-JEPA-Interview-Roadmap.md` — Simplified Chinese technical interview roadmap for LLM / VLM / JEPA / world models, application-layer focus.
-- `Multi-Round-Image-Editing-System-Architecture.md` and `Multi-Turn-Image-Editing-Long-Term-Implementation.md` — architecture docs for a multi-turn image editing product.
+**Seedream 5.0 单模型模式** — 所有图片操作统一走 `POST /api/v3/images/generations`。
+- 无当前图 → 文生图；有当前图 → 图生图。
+- seedream 本身是多模态的，**不需要额外的 LLM 做意图识别、prompt 改写或路由**。客户端只做 undo/redo 判断和透传用户指令。
+- **不引入独立 Visual QA / VLM 图像评估** — seedream 多模态生成时已内建质量把控（多模态大模型兜底）。`agents/visual_qa.py` 保留 `passed=True` 直通节点只是为维持 workflow 结构，**不是待补的功能缺口**，勿反复提「接入真实 Visual QA」。
+- `DoubaoLLM` 类仍存在于 `llm/client.py` 但未被任何 agent 导入使用。
 
-**`image_editor/`** — Python implementation of the multi-turn image editing agent framework.
-- Entrypoint: `image_editor.main` (uvicorn serves `image_editor.api:app`)
-- Deps in `pyproject.toml` (editable install via `pip install -e image_editor/`)
-- Requires `ARK_API_KEY` env var (火山引擎 ARK)
-- Pre-created pyenv virtualenv: `image-editor` (Python 3.11.9). Activate with `pyenv activate image-editor`.
-- Uses `MemoryStore` by default; production needs Postgres + S3/OSS.
-- No tests, lint, typecheck, or CI config present.
+## Setup & Run
 
-## Doc Conventions (Roadmap Only)
-
-- Keep Simplified Chinese except established technical terms (`RAG`, `Agent`, `KV Cache`, `LoRA`).
-- Major sections: `---` separators, top-level numbering `## 第零部分：` through `## 第九部分：`.
-- Subsections: numeric headings `### 1.3` / `#### 7.1`; preserve order.
-- Interview questions: `- [ ] ...`.
-- `背景了解` sections intentionally thin — do not expand into deep training or paper notes.
-
-## Editing Priorities (Roadmap Only)
-
-- Optimize for interview usefulness: priority, answer frameworks, system-design checkpoints.
-- Prefer high-signal additions over broad encyclopedic coverage.
-- Preserve application-layer focus; JEPA / world-model content should explain motivation, not imply mature production practice.
-
-## Python Project Notes
-
-- `storage.py` is `MemoryStore` — swap for Postgres before production.
-- `/execute` endpoint is synchronous — needs async Job Queue for production.
-- See `image_editor/TODOs.md` for full production migration checklist.
-- The LangGraph workflow is the core orchestrator (`workflow.py`); each agent node is in `agents/`.
-
-## Tooling Notes
-
-### Edit tool Unicode quote matching
-
-The edit tool does exact byte-level string matching. Chinese files in this repo use Unicode curly quotes (`\u201c` \u2014 `U+201C` LEFT DOUBLE QUOTATION MARK, `\u201d` \u2014 `U+201D` RIGHT DOUBLE QUOTATION MARK), not ASCII straight quotes (`"` \u2014 `U+0022`). They look visually identical but differ at the byte level:
-
-| Character | Unicode | UTF-8 bytes |
-|-----------|---------|-------------|
-| ASCII `"` | `U+0022` | `0x22` (1 byte) |
-| Chinese `\u201c` | `U+201C` | `0xE2 0x80 0x9C` (3 bytes) |
-| Chinese `\u201d` | `U+201D` | `0xE2 0x80 0x9D` (3 bytes) |
-
-When the LLM generates the `oldString` parameter, it tends to normalize `\u201c`/`\u201d` into ASCII `"`, causing `oldString not found` errors. The edit tool will report the exact error message but the mismatch is invisible to the eye.
-
-**Fix**: For edits involving Chinese punctuation, use a Python script with explicit `\u` escape sequences.
+> **Python 环境：默认按 pyenv 处理。** 优先用 pyenv 虚拟环境（`image-editor`）里的 `python` 做验证/启动（如 `python -m image_editor.main`、`python -c "import image_editor.api"`），前端用 `npm run build` / `npm run dev`。下方 `uv ...` 命令仅在装了 `uv` 时可用；若发现本机既非 pyenv 也无 uv（例如 `python`/`uv` 都不可用或找不到虚拟环境），**先询问用户**该用哪种方式，不要擅自猜测或运行改依赖的命令（`pip install`、`uv sync` 等）。
 
 ```bash
-python3 << 'PYEOF'
-with open('/path/to/file.md', 'r') as f:
-    content = f.read()
-old = '目标文本 \u201c包含中文引号\u201d'
-new = '替换文本'
-assert old in content, f"old not found"
-content = content.replace(old, new, 1)
-with open('/path/to/file.md', 'w') as f:
-    f.write(content)
-PYEOF
+# 后端 (Python >= 3.11, uv)
+cd image_editor
+uv sync                                 # 安装依赖
+uv run python -m image_editor.main      # 启动 localhost:8000
+
+# 前端 (Node.js >= 18)
+cd image_editor/frontend
+npm install
+npm run dev                             # 启动 localhost:5173，API 代理到 8000
 ```
+
+环境变量见 `.env.example`。**禁止直接读取 `.env` 文件**，变量名和默认值以 `.env.example` 为准。`ARK_API_KEY` 必填。
+
+## Key Gotchas
+
+- **`tools/__init__.py` 必须不为空** — 其中 `import doubao_image` 触发底部的 `registry.register()` 调用。如果该文件为空，所有工具未注册，workflow 会在 `run_image_tool` 报 `未知工具: doubao_generate`。
+- **图片 API 用相对路径** — `DoubaoImageClient` 的 `base_url` 以 `/v3` 结尾，请求路径 `images/generations`（无前导 `/`），最终 URL 为 `.../api/v3/images/generations`。
+- **`_download` 返回本地路径，但返回给前端的 URL 是远程 URL** — `DoubaoImageTool._save_result` 将 `image_url` 设为远程 URL（火山引擎 CDN），本地路径只写入 `metadata.local_path`。
+- **Workflow 是同步执行** — `/execute` 端点同步跑完整个 LangGraph workflow。生产环境需改为异步 Job Queue（见 TODOs.md P0）。
+
+## Logging
+
+- 日志文件在项目根目录 `logs/app.log`（`main.py` 启动时自动创建）。
+- `RotatingFileHandler`，单文件 5MB，保留 3 个备份。
+- `watchfiles`/`asyncio`/`httpx` 等第三方库的 DEBUG 日志已被屏蔽。
+
+## Golden Rules (记过簿)
+
+- **永远先读 README 和 AGENTS.md ** — 项目的启动、验证、构建方式以 README 为准。不要自己想当然地跑命令。不知道怎么做时先读文档，不要猜。
+- **禁止运行任何修改环境/依赖的命令** — 包括但不限于 `pip install`、`uv pip install`、`uv sync`、`npm install`（除非用户明确要求）。`uv run` 本身不会改依赖，可以用于验证。
+- **对应到本文的 Setup & Run** — 启动后端是 `uv run python -m image_editor.main`，不是 import 检查或其它方式。前端的启动方式是 `npm run dev`，写在 `frontend/package.json` 里。
+
+## Testing & Verification
+
+- 无自动化测试、无 lint、无 typecheck、无 CI。
+- `image_editor/TODOs.md` 中有 4 条**功能验证清单**（文生图、图生图、版本分支、undo/redo），每次改完代码应手动跑一遍。
+
+## Production Migration
+
+见 `image_editor/TODOs.md`。核心三项：MemoryStore → Postgres，/execute → 异步 Job Queue，本地下载 → S3/OSS。

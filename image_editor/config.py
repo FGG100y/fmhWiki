@@ -4,6 +4,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 @dataclass
 class DoubaoConfig:
@@ -16,7 +20,7 @@ class DoubaoConfig:
         )
     )
     model: str = field(
-        default_factory=lambda: os.getenv("DOUBAO_MODEL", "doubao-pro-32k")
+        default_factory=lambda: os.getenv("DOUBAO_MODEL", "doubao-seedream-5-0-260128")
     )
     max_retries: int = 3
     request_timeout: int = 120
@@ -27,7 +31,12 @@ class ImageToolConfig:
     """图片工具配置"""
 
     provider: str = field(default_factory=lambda: os.getenv("IMAGE_PROVIDER", "doubao"))
-    output_dir: str = field(default_factory=lambda: os.getenv("IMAGE_OUTPUT_DIR", "./output"))
+    output_dir: str = field(
+        default_factory=lambda: os.getenv("IMAGE_OUTPUT_DIR", "./output")
+    )
+    upload_dir: str = field(
+        default_factory=lambda: os.getenv("IMAGE_UPLOAD_DIR", "./uploads")
+    )
     max_image_size: tuple[int, int] = (2048, 2048)
 
 
@@ -35,7 +44,9 @@ class ImageToolConfig:
 class AppConfig:
     doubao: DoubaoConfig = field(default_factory=DoubaoConfig)
     image_tool: ImageToolConfig = field(default_factory=ImageToolConfig)
-    debug: bool = field(default_factory=lambda: os.getenv("DEBUG", "false").lower() == "true")
+    debug: bool = field(
+        default_factory=lambda: os.getenv("DEBUG", "false").lower() == "true"
+    )
     max_qa_retries: int = 2
 
 

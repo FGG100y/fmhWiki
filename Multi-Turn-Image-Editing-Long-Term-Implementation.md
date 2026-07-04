@@ -1,29 +1,18 @@
-# 多轮修图长期产品实现参考
+# 多轮修图产品实现参考
 
-> 面向“输入一句话生成图片，并支持后续多轮自然语言修图”的长期产品方案。
+> 面向"输入一句话生成图片，并支持后续多轮自然语言修图"的产品方案。
+>
+> **2026.07 更新**：当前实现采用**豆包 Seedream 5.0 单模型模式** — 多模态模型直接接收 `prompt + image` 并输出结果，内生处理意图理解。客户端工作流只负责 undo/redo 判断和透传用户指令。
 
-### 核心结论
+### 架构原则
 
-多轮修图产品的正确架构不是“自由聊天式多 Agent”，也不是“完全确定性流水线”，而是**确定性工作流 + 受控 Agent 步骤 + 显式状态管理**的混合架构。
-
-#### 三种架构范式对比
-
-| 范式 | 特点 | 适合场景 | 多轮修图适用性 |
-|---|---|---|---|
-| 自由聊天式多 Agent | LLM 控制所有流程，自主决定每一步 | 开放式探索、创意发散 | ❌ 不适合：无法保证安全检查、模型路由、质量评估必定执行 |
-| 完全确定性流水线 | 无 LLM，纯规则/模板 | 固定格式的批量处理 | ❌ 不适合：无法理解自然语言意图 |
-| **确定性工作流 + 受控 Agent 步骤** | 工作流引擎控制流程，LLM 仅在特定节点做推理 | 有状态的、需要理解自然语言的生产系统 | ✅ 推荐：可预测、可审计、可回退 |
-
-#### 为什么“自由聊天式多 Agent”不适合多轮修图
-
-1. **无法保证执行顺序**：安全检查可能被 LLM 跳过，模型路由可能被 LLM “创造性”地绕过。
-2. **无法保证成本可控**：每步都有规划开销，token 消耗约为确定性工作流的 20 倍。
-3. **无法保证可审计**：Agent 轨迹难以结构化，无法满足合规和审计需求。
-4. **无法保证版本管理**：自由聊天没有版本树概念，无法支持撤销/重做/分支。
+多轮修图产品的正确架构是**确定性工作流 + 显式状态管理**。Agent 步骤只在必要时介入，不要让 LLM 自由决策流程走向。
 
 ---
 
-#### 产业级证据：业界共识的形成（2024.12 — 2026.06）
+#### 产业级证据：业界共识的形成（2024.12 — 2026.07）
+
+> **2026.07 更新**：随着豆包 Seedream 5.0 等原生多模态大模型的成熟，产业共识进一步向"简化"方向演进。多模态模型能够内生处理意图理解和编辑决策，使得 Agent 步骤可大幅精简。这与 Anthropic 提出的"start static, add dynamism incrementally"原则一致——先用最简单的单模型工作流承载业务，仅在单模型无法覆盖的场景下才引入多模型路由和独立 Agent 节点。
 
 **Anthropic（2024.12）— 最权威的架构指导**
 来源：https://www.anthropic.com/engineering/building-effective-agents
@@ -121,42 +110,48 @@ Metacto 指出 prompt-loop 系统的**三种必然失败模式**（不是 prompt
 
 ---
 
-#### 当前实现验证：`image_editor/` 架构对齐
+#### 当前实现：`image_editor/workflow.py` 9 节点 DAG
 
 `image_editor/workflow.py` 的 LangGraph StateGraph 是一个**固定 DAG 拓扑**，不是 Agent Loop：
 
 ```
 load_session → safety_check → classify_intent
-                                  ├─ version_op → handle_version_op → END
-                                  ├─ image_op → rewrite_prompt → select_tool
-                                  │              → run_image_tool → visual_qa
-                                  │                  ├─ pass  → persist_turn → END
-                                  │                  ├─ retry → rewrite_prompt (max 2次)
-                                  │                  └─ fail  → persist_turn → END
-                                  └─ fail → fail → END
+                                   ├─ version_op → handle_version_op → END
+                                   └─ image_op → rewrite_prompt → select_tool
+                                                  → run_image_tool → visual_qa
+                                                      ├─ pass  → persist_turn → END
+                                                      ├─ retry → rewrite_prompt (max 2)
+                                                      └─ fail  → persist_turn → END
 ```
 
-- 唯一的“循环”是 `retry_count < 2` 的受控重试，不是开放式的 Agent 循环
-- 条件分支由纯函数 `route_by_intent()` 和 `route_by_qa()` 控制，不存在 LLM 自主决策下一步
-- 每个 LLM 调用被限定在单一节点内，输出固定 JSON schema，由 Pydantic 强校验
-- State 是 25 个命名字段的 `TypedDict`，通过 graph 单向流动
-- 版本树通过 `parent_turn_id` 实现（`storage.py` 中的 `undo()` / `redo()` / `switch_current_turn()`）
+各节点在 seedream 单模型模式下的实际行为：
+- `classify_intent` — 区分 undo/redo 和图片操作；有当前图 → `edit_image`，无 → `generate_image`（纯规则，无 LLM）
+- `rewrite_prompt` — 透传 `user_instruction`（seedream 直接理解自然语言）
+- `select_tool` — 全部走 `doubao_generate`（单模型，无需路由）
+- `run_image_tool` — 有 `current_image_url` → 图生图（`tool.edit`）；无 → 文生图（`tool.generate`）
+- `visual_qa` — 透传 always pass（seedream 自行保证质量）
 
-#### 为什么需要 Agent 步骤
+`DoubaoLLM` 类存在于 `llm/client.py` 但未被任何 agent 使用。版本树通过 `parent_turn_id` + `undo()` / `redo()` / `switch_current_turn()` 实现。
 
-图像编辑需要理解自然语言意图（“把背景换成雪山，人物不要变”），这需要 LLM 的推理能力。但 LLM 只应在特定节点被调用：
+条件分支由纯函数 `route_by_intent()` 和 `route_by_qa()` 控制，不存在 LLM 自主决策下一步。唯一的"循环"是 `retry_count < 2` 的受控重试，不是开放式的 Agent 循环。
+
+**多模型模式**：需要额外的 Agent 步骤来桥接自然语言与多模型调用：
 - **意图分类**：理解用户要做什么
 - **Prompt 改写**：将口语化指令转为结构化编辑指令
 - **质量评估**：检查输出是否满足用户要求
 
 #### 本方案的架构原则
 
+两种部署模式的共同原则保持不变：
+
 ```text
 确定性工作流引擎（LangGraph StateGraph）
   ↓ 控制流程
-受控 Agent 步骤（LLM 在特定节点做推理）
+  ├── 单模型模式：多模态大模型内生处理意图 + 编辑 + 生成
+  │      节点：load → safety → multimodal_model → visual_qa → persist
+  └── 多模型模式：受控 Agent 步骤（LLM 在特定节点做推理）
+         节点：load → safety → intent → rewrite → route → run → visual_qa → persist
   ↓ + 版本树管理（parent_turn_id）
-  ↓ + 多模型工具层（Gemini / GPT Image / ComfyUI）
   ↓ + 质量评估闭环（Visual QA + 自动重试）
 ```
 
@@ -250,6 +245,7 @@ Postgres + Object Storage + Observability
 ### 3.3 推荐组合
 
 ```text
+# 基础设施
 LangGraph
 +
 Postgres
@@ -257,231 +253,46 @@ Postgres
 S3 / R2 / OSS
 +
 Redis Queue / Celery / Dramatiq
-+
-Gemini 3.1 Flash Image / Gemini 3 Pro Image（多轮编辑、文生图）
+
+# 单模型模式（推荐起步方案）
+豆包 Seedream 5.0（主模型，原生多轮编辑 + 文生图，text+image in, image out）
+
+# 多模型模式（高级扩展方案）
+Gemini 3.1 Flash Image（主模型，多轮编辑 + 文生图）
 +
 GPT Image 2 / GPT Image 1.5（备选图像生成/编辑）
 +
-ComfyUI / Flux / SD 作为高级编辑后端（局部 inpainting、ControlNet 条件控制）
+ComfyUI / Flux / SD（高级编辑：局部 inpainting、ControlNet 条件控制）
 ```
 
-### 3.4 与 Deep Agents 的关系与选择
+### 3.4 与 Deep Agents 的关系
 
-> 注：Deep Agents（`deepagents`）是 LangChain 官方的 agent harness，构建在 LangGraph 之上。它本身就是一个 `CompiledStateGraph`，可以调用所有 LangGraph 接口（checkpointer、interrupt、streaming 等）。三者是分层关系：LangGraph → LangChain → Deep Agents，而非竞争关系。
+Deep Agents 底层是 LangGraph，理论上可以实现相同功能。但多轮修图的核心需求——版本树（`parent_turn_id`）、显式状态管理、可预测的成本——在 Deep Agents 的 Agent Loop 范式下需要大量定制才能实现，不如直接用 LangGraph 构建专用工作流。详见 [3.4.1 版本树为什么重要](#521-什么是版本树)。
 
-核心问题不是"用 Deep Agents 还是用 LangGraph"，而是**选择哪种架构范式**：
-
-- **Agent Loop（Deep Agents 默认范式）**：LLM 在循环中自主决定每一步做什么
-- **State Machine（本文方案）**：预定义节点按固定顺序执行，LLM 仅在特定节点内做决策
-
-两者都基于 LangGraph，但使用方式不同。
-
-#### 3.4.1 核心范式对比：Agent Loop vs State Machine
-
-**Deep Agents 的默认范式：Agent Loop**
-
-```text
-用户输入："把背景换成雪山，人物不要变"
-  ↓
-Deep Agent 收到用户消息
-  ↓
-LLM 自主决定下一步做什么（规划）
-  ↓
-LLM 决定调用哪个工具（可能调用 search、write_file、task 等）
-  ↓
-LLM 根据工具返回结果再决定下一步
-  ↓
-... 循环直到 LLM 认为任务完成 ...
-  ↓
-返回结果
-```
-
-虽然 Deep Agents 底层是 LangGraph，但它的**默认行为**是让 LLM 在每个步骤自主决策。你可以通过自定义工具和 prompt 来约束 LLM 的行为，但这等于在 Deep Agents 之上重新定义工作流。
-
-**本文方案的范式：State Machine**
-
-```text
-用户输入："把背景换成雪山，人物不要变"
-  ↓
-load_session（加载当前图片和历史状态）
-  ↓
-safety_check（安全检查 — 必定执行）
-  ↓
-classify_intent（意图分类 — 必定执行）
-  ↓
-rewrite_prompt（prompt 改写 — 必定执行）
-  ↓
-select_tool（模型路由 — 必定执行，使用确定性规则）
-  ↓
-run_image_tool（调用图像模型 — 必定执行）
-  ↓
-visual_qa（质量检查 — 必定执行）
-  ↓
-persist_turn（持久化 — 必定执行）
-  ↓
-返回结果
-```
-
-**关键区别**：虽然两者都能用 LangGraph 的 checkpointer、interrupt 等功能，但**流程控制权**不同：
-- Deep Agents：LLM 决定何时检查安全、何时选择模型、何时做 QA
-- 本文方案：工作流引擎决定这些，LLM 只在需要时被调用
-
-#### 3.4.1.1 执行模式与时延设计
-
-上述流程图展示的是逻辑执行顺序，实际部署时需要考虑用户等待时长。各步骤耗时差异很大：
-
-| 步骤 | 预估耗时 | 类型 | 说明 |
-|---|---|---|---|
-| load_session | <100ms | 快速 | 从数据库读取状态 |
-| safety_check | 100-500ms | 快速 | LLM 调用或规则匹配 |
-| classify_intent | 200-1000ms | 快速 | LLM 调用 |
-| rewrite_prompt | 500-2000ms | 快速 | LLM 调用 |
-| select_tool | <100ms | 快速 | 确定性规则，无需 LLM |
-| run_image_tool | **5-60s** | **慢速** | 图像模型调用，主要瓶颈 |
-| visual_qa | 1-3s | 中等 | LLM 调用（多模态） |
-| persist_turn | <100ms | 快速 | 数据库写入 |
-
-**两阶段执行模型**：
-
-```text
-【同步阶段 — 用户等待，<3s】
-  load_session → safety_check → classify_intent → rewrite_prompt → select_tool
-      ↓
-  返回 job_id + turn_id，状态为 "processing"
-      ↓
-【异步阶段 — 后台执行，5-60s】
-  run_image_tool → visual_qa → persist_turn
-      ↓
-  通过 WebSocket/SSE 推送结果
-```
-
-**设计要点**：
-
-1. **早期终止**：`safety_check` 失败时直接返回错误，不进入异步队列，避免浪费图像生成资源。
-2. **流式反馈**：异步阶段每步完成后推送状态更新（`queued → running → qa_checking → succeeded`），前端展示进度条。
-3. **超时控制**：`run_image_tool` 设置超时（如 60s），超时自动降级到备选模型（如从 Gemini 3 Pro 降级到 Gemini 3.1 Flash）。
-4. **重试隔离**：重试时只重新执行 `run_image_tool → visual_qa`，不需要重新执行同步阶段的步骤。
-
-**前端用户体验**：
-
-```text
-用户发送请求
-  ↓
-立即显示："正在分析您的请求..."（同步阶段 <3s）
-  ↓
-显示："正在生成图片..." + 进度条（异步阶段）
-  ↓
-每 5s 推送进度："模型调用中..." → "质量检查中..." → "完成"
-  ↓
-显示结果图
-```
-
-#### 3.4.2 具体场景对比
-
-**场景 1：用户说"把背景换成雪山，人物不要变"**
-
-| 环节 | Deep Agents 默认行为 | 本文方案行为 |
-|---|---|---|
-| 意图理解 | LLM 自行理解，可能误解为"生成一张雪山图片" | `classify_intent` 节点明确输出 `intent=background_replace, edit_scope=background` |
-| Prompt 改写 | LLM 可能直接用用户原始 prompt | `rewrite_prompt` 节点输出结构化的 positive/negative prompt 和 preservation constraints |
-| 模型选择 | LLM 自行决定用哪个模型（可能选错） | `select_tool` 节点用确定性规则选择 `gemini-3.1-flash-image` |
-| 安全检查 | LLM 可能跳过或忘记执行 | `safety_check` 节点**必定执行**，在工作流最前面 |
-| 质量检查 | LLM 可能直接返回结果 | `visual_qa` 节点**必定执行**，检查主体是否被修改 |
-| 结果持久化 | 保存在消息历史中，无结构化版本信息 | 保存到 `turns` 表，包含 `parent_turn_id`、`input_image_id`、`output_image_id`、`model_params` |
-
-> 注：Deep Agents 可以通过自定义工具和 prompt 来强制执行这些步骤，但这等于重新定义了工作流——你本质上是在 Deep Agents 之上构建了一个状态机。
-
-**场景 2：用户说"回到第 2 版，改成横版"**
-
-| 环节 | Deep Agents 默认行为 | 本文方案行为 |
-|---|---|---|
-| 版本回退 | 无内置版本树概念，需要自己实现 | `handle_version_op` 节点原生支持 undo/redo/switch |
-| 版本切换 | 需要从消息历史中"找到"之前的图片 | 直接从 `turns` 表查询 `parent_turn_id` 链 |
-| 参数继承 | 无结构化参数，需要从历史消息中提取 | 直接从 `turns` 表读取上一版的 `model_params` |
-
-**场景 3：生成失败需要重试**
-
-| 环节 | Deep Agents 默认行为 | 本文方案行为 |
-|---|---|---|
-| 重试策略 | LLM 自行决定是否重试、如何重试 | `route_by_qa` 条件边控制：`pass → persist_turn`，`retry → rewrite_prompt` |
-| 重试次数 | 无限制，LLM 可能无限重试 | `retry_count` 字段控制，最多重试 1-2 次 |
-| 降级策略 | LLM 可能尝试完全不同的方法 | 从 `rewrite_prompt` 重新开始，调整 prompt 和参数 |
-
-#### 3.4.3 详细对比表
-
-| 维度 | Deep Agents（Agent Loop 范式） | 本文方案（State Machine 范式） |
-|---|---|---|
-| 底层框架 | LangGraph（`CompiledStateGraph`） | LangGraph（`StateGraph`） |
-| 流程控制 | LLM 在循环中自主决定每一步 | 预定义节点按固定顺序执行，LLM 仅在特定节点内做决策 |
-| 安全检查 | 依赖 LLM 记忆，可能被跳过 | 工作流节点，必定执行 |
-| 模型路由 | LLM 自行选择模型，可能选错 | 确定性规则，按意图/编辑类型/约束选择 |
-| Token 消耗 | 高（约 20x）：每步都需要 LLM 规划 | 低：只有 rewrite_prompt 和 visual_qa 需要 LLM |
-| 历史管理 | 消息上下文 + 虚拟文件系统，无版本概念 | 一等公民版本树（`parent_turn_id`），支持任意版本切换 |
-| 回退/分支 | 可用 LangGraph interrupt 实现，但无内置版本树 | 架构原生支持 undo/redo/switch/branch |
-| 可观测性 | 偏 Agent 执行日志（tool calls, planning steps） | 面向产品指标：turn、job、model call 全链路，结构化日志 |
-| 质量闭环 | 常见做法是"失败再让 Agent 试"，无结构化 QA | 显式 Visual QA 节点 + 可控重试策略（最多 N 次） |
-| 适配多轮修图 | 能做，但 `DeepAgentState` 默认只有 `todos` 和 `files`，缺少图像专用字段 | 天然匹配：`input_image_id`、`output_image_id`、`mask_image_id`、`model_params`、`qa_score` |
-| 降级策略 | LLM 自行决定降级路径 | 确定性 fallback：主模型不可用 → 备选模型 → ComfyUI |
-| 成本控制 | 难以预测：LLM 可能做大量无关规划 | 可预测：每个 turn 的 LLM 调用次数固定（rewrite + QA） |
-| 审计合规 | Agent 轨迹难以结构化 | turn / job / model call 三层记录，满足审计需求 |
-
-#### 3.4.4 用 Deep Agents 实现多轮修图的代价
-
-Deep Agents 底层是 LangGraph，理论上可以实现相同功能。但需要：
-
-1. **重新定义工作流**：通过自定义工具和 prompt 约束 LLM 的行为，让它按固定顺序执行。但这等于在 Deep Agents 之上重新构建了一个状态机，增加了复杂度。
-
-2. **扩展状态结构**：通过 middleware 扩展 `DeepAgentState`，添加 `input_image_id`、`output_image_id`、`mask_image_id`、`model_params`、`qa_score` 等字段。Deep Agents 的论坛有用户反馈 `context_schema` 的自定义字段无法直接在 `runtime.state` 中访问，需要额外 workaround。
-
-3. **构建版本树**（详见 [5.2 版本树设计](#52-版本树设计)）：Deep Agents 的数据模型是 `messages`（线状消息历史）+ `files`（平铺文件系统），没有 `parent_turn_id` 概念。要实现撤销/重做/分支/版本切换，需要自己构建完整的版本树系统——这个工作量远超 Deep Agents 提供的现成能力。
-
-4. **结构化日志**：Deep Agents 的事件流是面向 agent 执行的（tool-call, tool-result, todos-changed），不是面向产品指标的。需要额外的 observability 层来聚合 turn/job/model call 级别的指标。
-
-5. **成本控制**：Deep Agents 的 token 消耗约为直接使用 LangGraph 的 20 倍（因为每步都有规划开销）。对于高频修图场景，成本差异显著。
-
-**核心问题**：如果需要做以上所有定制，那 Deep Agents 提供的内置能力（规划、文件系统、子 agent）反而成了需要绕过的障碍。不如直接用 LangGraph 构建专用工作流。
-
-#### 3.4.5 更合理的用法：分层组合
-
-Deep Agents 并非无用，而是应该用在它擅长的地方：
-
-- **在线主流程**：使用本文的确定性工作流承接生产流量（可预测、低成本、可审计）。
-- **离线任务**：把 Deep Agents 用在"复杂 prompt/工具策略搜索"、"离线策略优化"或"需要自主规划的子任务"（如：分析用户历史偏好、生成个性化模板）。
-- **混合架构**：用 Deep Agents 作为子 agent 处理特定子任务（如：分析用户意图、生成创意方案），主流程仍用确定性工作流编排。
+---
 
 ---
 
 ## 四、核心工作流
 
+当前实现采用 seedream 单模型模式。seedream 作为多模态模型，直接接收 `prompt + image` 并输出结果。客户端工作流不负责意图理解和 prompt 改写——仅处理 undo/redo 判断和透传用户指令。
+
 ```text
-Start
-  ↓
-Load Session State
-  ↓
-Safety Check
-  ↓
-Classify Intent
-  ↓
-Version Operation? ── yes → Undo / Redo / Switch Version → End
-  ↓ no
-Analyze Edit Request
-  ↓
-Rewrite Prompt
-  ↓
-Select Image Tool
-  ↓
-Run Image Tool
-  ↓
-Visual QA
-  ↓
-Retryable Failure? ── yes → Rewrite Prompt / Adjust Params → Run Image Tool
-  ↓ no
-Persist Turn
-  ↓
-Return Result
+Start → Load Session → Safety Check
+                           ├─ Version Op? → Undo/Redo → End
+                           └─ Edit Prompt → Route → Run Image Tool
+                                              (via seedream images/generations)
+                                                   ├─ 有当前图 → 图生图
+                                                   └─ 无 → 文生图
+                                      ↓
+                                  Visual QA → Persist Turn → End
 ```
 
+> `classify_intent`、`rewrite_prompt`、`select_tool` 节点保留在代码中但行为已简化：intent 仅区分 undo/redo；prompt 透传；router 全部走 doubao_generate。seedream 内生处理意图理解和编辑决策。
+
 ### 4.1 典型用户链路
+
+> **单模型模式**：用户所有指令（生成、编辑、风格变换、局部修改）直接发给多模态模型。模型根据收到的图片+指令自主处理。无需区分"这是生成还是编辑"。
 
 ```text
 Turn 0: 生成一张赛博朋克风格的猫咪海报
@@ -496,6 +307,8 @@ Turn 4: 回到 Turn 2，改成横版 16:9
 ---
 
 ## 五、数据模型
+
+> **单模型 vs 多模型字段使用**：`intent`、`edit_scope`、`rewritten_prompt`、`negative_prompt`、`preservation_constraints`、`model_provider`、`selected_tool` 等字段在多模型模式下有值，在单模型模式下为 null。单模型模式下 `model_name` 固定为多模态模型名（如 `doubao-seedream-5.0`），`user_instruction` 为原始用户输入。
 
 ### 5.1 核心表
 
@@ -692,48 +505,53 @@ CREATE TABLE turns (
 
 ```python
 class ImageEditState(TypedDict):
+    # 通用字段（两种模式共用）
     user_id: str
     project_id: str
     session_id: str
     turn_id: str
-
     user_instruction: str
     current_turn_id: str | None
     current_image_id: str | None
+    current_image_url: str | None       # 单模型模式新增：当前图片 URL（传递给多模态模型）
     reference_image_ids: list[str]
     mask_image_id: str | None
+    mask_image_url: str | None          # 单模型模式新增：mask 图片 URL
 
-    intent: str | None
-    edit_scope: str | None
-    operation: str | None
-    constraints: list[str]
-    rewritten_prompt: str | None
-    negative_prompt: str | None
-
-    selected_tool: str | None
-    model_provider: str | None
+    # 多模型模式专用（单模型模式 unused）
+    intent: str | None                  # single-model unused
+    edit_scope: str | None              # single-model unused
+    operation: str | None               # single-model unused
+    constraints: list[str]              # single-model unused
+    rewritten_prompt: str | None        # single-model unused
+    negative_prompt: str | None         # single-model unused
+    selected_tool: str | None           # single-model unused
+    model_provider: str | None          # single-model unused
     model_name: str | None
     model_params: dict
 
+    # 输出字段
     output_image_id: str | None
+    output_image_url: str | None        # 单模型模式新增：输出图片 URL
     qa_result: dict | None
     retry_count: int
     error: str | None
+    job_id: str | None                  # 新增：异步任务 ID
 ```
 
-### 6.1 节点设计
+### 6.1 节点设计（当前实现）
 
-| 节点 | 输入 | 输出 |
-|---|---|---|
-| load_session | session_id, current_turn_id | 当前图片、历史摘要、用户偏好 |
-| safety_check | 用户指令、图片元数据 | allow / reject / needs_review |
-| classify_intent | 用户指令、当前状态 | intent、operation、edit_scope |
-| handle_version_op | undo / redo / switch 指令 | 新 current_turn_id |
-| rewrite_prompt | 用户指令、约束、当前图片描述 | positive_prompt、negative_prompt、preserve constraints |
-| select_tool | intent、mask、参考图、质量档位 | tool、model、params、fallback |
-| run_image_tool | 图片、prompt、参数 | output_image_id |
-| visual_qa | 原图、结果图、用户要求 | pass、score、issues、retry_suggestion |
-| persist_turn | 状态、结果、QA | turn 记录、session current_turn_id |
+| 节点 | 输入 | 输出 | 行为 |
+|---|---|---|---|
+| load_session | session_id | current_image_url, current_image_id | 从 MemoryStore 加载 |
+| safety_check | user_instruction | error (if blocked) | 关键词过滤 |
+| classify_intent | user_instruction, current_image_url | intent, operation | 纯规则：undo/redo → version_op，其余 → image_op |
+| handle_version_op | intent, session_id | current_turn_id | store.undo()/redo() |
+| rewrite_prompt | user_instruction | rewritten_prompt | 透传 |
+| select_tool | intent | selected_tool, model_name | 全部 → doubao_generate + seedream |
+| run_image_tool | selected_tool, current_image_url, rewritten_prompt | output_image_id, output_image_url | 有图 → tool.edit()，无图 → tool.generate() |
+| visual_qa | — | qa_result (passed=True) | 透传 |
+| persist_turn | 全状态 | — | 写入 MemoryStore |
 
 ### 6.2 工作流伪代码
 
@@ -756,13 +574,8 @@ workflow.add_edge("load_session", "safety_check")
 workflow.add_edge("safety_check", "classify_intent")
 
 workflow.add_conditional_edges(
-    "classify_intent",
-    route_by_intent,
-    {
-        "version_op": "handle_version_op",
-        "image_op": "rewrite_prompt",
-        "reject": "fail",
-    },
+    "classify_intent", route_by_intent,
+    {"version_op": "handle_version_op", "image_op": "rewrite_prompt", "fail": "fail"},
 )
 
 workflow.add_edge("rewrite_prompt", "select_tool")
@@ -770,91 +583,31 @@ workflow.add_edge("select_tool", "run_image_tool")
 workflow.add_edge("run_image_tool", "visual_qa")
 
 workflow.add_conditional_edges(
-    "visual_qa",
-    route_by_qa,
-    {
-        "pass": "persist_turn",
-        "retry": "rewrite_prompt",
-        "fail": "persist_turn",
-    },
+    "visual_qa", route_by_qa,
+    {"pass": "persist_turn", "retry": "rewrite_prompt", "fail": "persist_turn"},
 )
-
-workflow.add_edge("handle_version_op", END)
-workflow.add_edge("persist_turn", END)
-workflow.add_edge("fail", END)
-```
 
 ---
 
 ## 七、Agent 节点设计
 
-### 7.1 Intent Agent
+> 当前 seedream 单模型模式下，所有节点均不使用 LLM。`DoubaoLLM` 类保留但未被调用。如需多模型扩展，可恢复各节点的 LLM 调用逻辑。
 
-职责：把用户自然语言转成结构化意图。
+### 7.1 classify_intent
+当前行为：纯规则判断。输入精确匹配 undo/redo → version_op；其余 → image_op。有当前图时 intent 记为 `edit_image`，无时为 `generate_image`。seedream 多模态输入自行判断具体编辑类型。
 
-示例输入：
+### 7.2 rewrite_prompt
+当前行为：透传。`rewritten_prompt = user_instruction`。seedream 直接理解自然语言。
 
-```text
-用户：把背景换成雪山，人物不要变
-当前是否有图：true
-是否有 mask：false
-是否有参考图：false
-```
+### 7.3 select_tool
+当前行为：全部走 `doubao_generate`，模型为 `DOUBAO_MODEL`（seedream）。无需路由。
 
-示例输出：
-
-```json
-{
-  "intent": "edit_image",
-  "operation": "background_replacement",
-  "edit_scope": "background",
-  "requires_mask": false,
-  "preserve": ["main subject identity", "pose", "composition"],
-  "risk": "subject_identity_drift"
-}
-```
-
-常见 intent：
-
-| intent | 含义 |
-|---|---|
-| generate_image | 首次文生图 |
-| edit_image | 基于当前图片编辑 |
-| local_edit | 局部编辑 |
-| style_transfer | 风格迁移 |
-| background_replace | 背景替换 |
-| object_add | 添加对象 |
-| object_remove | 删除对象 |
-| text_edit | 图片中文字编辑 |
-| variation | 生成变体 |
-| upscale | 高清放大 |
-| undo | 撤销 |
-| redo | 重做 |
-| compare | 对比版本 |
-| export | 导出 |
-
-### 7.2 Prompt Agent
-
-职责：把口语化指令改写为图像模型更稳定的编辑指令。
-
-用户输入：
-
-```text
-换成日落，人物别动
-```
-
-改写输出：
-
-```json
-{
-  "positive_prompt": "Edit the current image by changing the background lighting and atmosphere to a warm sunset scene. Keep the main subject's identity, face, body, pose, clothing, camera angle, and composition unchanged. Only modify the background lighting, sky color, and ambient tone.",
-  "negative_prompt": "Do not change the face, pose, clothing, body shape, camera angle, or composition.",
-  "preservation_constraints": ["face identity", "pose", "composition", "clothing"],
-  "edit_strength": 0.45
-}
-```
+### 7.4 visual_qa
+当前行为：透传 always pass。seedream 自行保证输出质量。retry 机制保留框架但从未触发。
 
 ### 7.3 模型路由规则
+
+> **单模型模式**：本节点在多模态大模型场景下被移除。使用单一多模态模型时无需路由，所有请求直接发给该模型。
 
 职责：根据意图、编辑类型和约束选择最合适的模型和工具。路由逻辑应作为确定性规则实现，而非独立 Agent。
 
@@ -862,76 +615,19 @@ workflow.add_edge("fail", END)
 
 > 注：下表中"模型"指基础生成模型。ControlNet、IP-Adapter、LoRA 是**附加在基础模型上的条件控制/微调技术**，不是独立的基础模型。
 
-| 模型 | 文生图 | 多轮编辑 | 局部 inpainting | 人物一致性 | 文字渲染 | 分辨率 |
-|---|---|---|---|---|---|---|
-| Gemini 3.1 Flash Image | ✅ | ✅（Thought Signatures） | ✅ | ✅（reference image） | ✅ | 512px ~ 4K |
-| Gemini 3 Pro Image | ✅ | ✅（Thinking 模式） | ✅ | ✅ | ✅ | 1K ~ 4K |
-| GPT Image 2 | ✅ | ✅（Responses API） | ✅（mask 支持） | ✅（input_fidelity） | ✅ | 自定义分辨率 |
-| GPT Image 1.5 | ✅ | ✅ | ✅ | ✅ | 一般 | 1024x1024 等 |
-| Flux + ComfyUI | ✅ | 有限 | ✅（Flux inpainting） | ✅（通过 IP-Adapter） | 有限 | 可配置 |
-| SDXL + ControlNet | ✅ | 有限 | ✅（通过 ControlNet） | ✅（通过 IP-Adapter） | 有限 | 可配置 |
+| 模型 | 文生图 | 多轮编辑 | 局部 inpainting | 人物一致性 | 文字渲染 | 分辨率 | 多模态 |
+|---|---|---|---|---|---|---|---|---|
+| 豆包 Seedream 5.0 | ✅ | ✅（原生多轮） | ✅（文本描述） | ✅（原生） | ✅ | 1K ~ 4K | ✅（text+image in, image out） |
+| Gemini 3.1 Flash Image | ✅ | ✅（Thought Signatures） | ✅ | ✅（reference image） | ✅ | 512px ~ 4K | ❌（需单独 prompt/routing） |
+| Gemini 3 Pro Image | ✅ | ✅（Thinking 模式） | ✅ | ✅ | ✅ | 1K ~ 4K | ❌（需单独 prompt/routing） |
+| GPT Image 2 | ✅ | ✅（Responses API） | ✅（mask 支持） | ✅（input_fidelity） | ✅ | 自定义分辨率 | ❌（需单独 prompt/routing） |
+| GPT Image 1.5 | ✅ | ✅ | ✅ | ✅ | 一般 | 1024x1024 等 | ❌（需单独 prompt/routing） |
+| Flux + ComfyUI | ✅ | 有限 | ✅（Flux inpainting） | ✅（通过 IP-Adapter） | 有限 | 可配置 | ❌ |
+| SDXL + ControlNet | ✅ | 有限 | ✅（通过 ControlNet） | ✅（通过 IP-Adapter） | 有限 | 可配置 | ❌ |
 
-#### 7.3.2 路由规则示例
+> **多模态 vs 非多模态**：多模态模型（如豆包 Seedream 5.0）同时接受文本和图片输入并输出图片，模型内生处理意图理解、编辑方式选择和参数决策。非多模态模型需要外部 pipeline 将用户指令拆解为 prompt、mask、参数等结构化输入。
 
-```python
-# 基础路由规则 — 生产环境应使用配置化规则而非硬编码
-def select_model(intent: str, edit_scope: str, has_mask: bool, has_reference: bool) -> dict:
-    if intent == "generate_image":
-        return {"tool": "gemini_generate", "model": "gemini-3.1-flash-image"}
-    
-    if intent in ["edit_image", "background_replace", "style_transfer"]:
-        if edit_scope == "global":
-            return {"tool": "gemini_edit", "model": "gemini-3.1-flash-image"}
-    
-    if intent == "local_edit" and has_mask:
-        return {"tool": "comfyui_inpaint", "model": "flux-dev"}
-    
-    if intent == "variation":
-        return {"tool": "gemini_edit", "model": "gemini-3-pro-image"}
-    
-    if intent == "upscale":
-        return {"tool": "upscale", "model": "esrgan"}
-    
-    # 默认：全局自然语言编辑
-    return {"tool": "gemini_edit", "model": "gemini-3.1-flash-image"}
-```
-
-#### 7.3.3 路由决策因子
-
-| 因子 | 优先级 | 说明 |
-|---|---|---|
-| 编辑类型 | 高 | 全局编辑 → Gemini/GPT Image；局部 inpainting → ComfyUI/Flux |
-| 人物一致性要求 | 高 | 有参考图 → Gemini reference image 或 IP-Adapter（图像提示适配器） |
-| 文字渲染需求 | 中 | 需要文字 → Gemini 3 / GPT Image 2 |
-| 成本约束 | 中 | 高频低成本 → Gemini 3.1 Flash Image |
-| 延迟要求 | 低 | 实时 → Gemini 3.1 Flash Image（速度快） |
-| 供应商可用性 | 高 | 主模型不可用 → fallback 到备选模型 |
-
-### 7.4 Visual QA Agent
-
-职责：检查输出是否满足用户要求。
-
-检查项：
-
-- 是否完成目标修改。
-- 是否破坏主体身份。
-- 是否改变不该改变的区域。
-- 是否有明显畸形、错字、伪影。
-- 是否违反安全策略。
-
-示例输出：
-
-```json
-{
-  "pass": false,
-  "score": 0.62,
-  "issues": [
-    "background changed correctly",
-    "main subject face changed slightly"
-  ],
-  "retry_suggestion": "Reduce edit strength and explicitly preserve facial identity."
-}
-```
+#### 7.2.1 模型能力矩阵
 
 ---
 
@@ -971,10 +667,13 @@ class EditRequest:
 
 ### 8.3 可接入工具
 
-> 注：下表区分了**基础模型**（生成/编辑图像）、**条件控制技术**（附加在基础模型上）、**工具/工作流引擎**（编排和后处理）。
+> 注：下表区分了**多模态模型**（同时处理文本+图片输入输出）、**基础模型**（生成/编辑图像）、**条件控制技术**（附加在基础模型上）、**工具/工作流引擎**（编排和后处理）。
 
 ```text
-# 基础模型（API 或本地部署）
+# 多模态模型（text + image in, image out — 单模型模式首选）
+DoubaoSeedreamTool       # 豆包 Seedream 5.0：原生多轮编辑、文本+图片输入、图片输出
+
+# 基础模型（API 或本地部署 — 多模型模式）
 GeminiImageTool          # Gemini 3.1 Flash Image / Gemini 3 Pro Image
 OpenAIImageTool          # GPT Image 2 / GPT Image 1.5 / GPT Image 1
 FluxImageTool            # Flux dev/schnell（本地或 API）
@@ -992,25 +691,9 @@ SafetyModerationTool     # 内容安全审核
 MaskGenerationTool       # 自动生成 mask（SAM / GroundingDINO）
 ```
 
-### 8.4 模型路由初版规则
+### 8.4 模型路由
 
-```python
-# 基础路由规则 — 生产环境建议使用配置中心管理
-if intent == "generate_image":
-    tool = "gemini_generate"
-    model = "gemini-3.1-flash-image"
-elif intent in ["edit_image", "background_replace", "style_transfer"]:
-    tool = "gemini_edit"
-    model = "gemini-3.1-flash-image"
-elif intent == "local_edit" and mask_image_id:
-    tool = "comfyui_inpaint"
-    model = "flux-dev"
-elif intent == "upscale":
-    tool = "upscale"
-    model = "esrgan"
-else:
-    tool = "gemini_edit"
-    model = "gemini-3.1-flash-image"
+当前单模型模式：所有请求统一走 `doubao_seedream`，无需路由。多模型模式需根据意图和约束选择最佳模型（工具层预留扩展）。
 ```
 
 后期路由可加入：
@@ -1068,6 +751,18 @@ POST /jobs/{job_id}/cancel
 
 **同步响应**（<3s，安全检查 + 意图分析完成后）：
 
+**单模型模式同步响应**（精简，无 analysis 字段）：
+```json
+{
+  "job_id": "job_456",
+  "turn_id": "turn_789",
+  "status": "processing",
+  "model": "doubao-seedream-5.0",
+  "estimated_time": "5-20s"
+}
+```
+
+**多模型模式同步响应**（含结构化 analysis）：
 ```json
 {
   "job_id": "job_456",
@@ -1118,6 +813,30 @@ POST /jobs/{job_id}/cancel
 图片生成和编辑必须异步处理。
 
 ### 10.1 两阶段执行模型
+
+#### 单模型模式
+
+```text
+【同步阶段 — 用户等待，<1s】
+  API 接收请求
+    ↓
+  load_session（加载状态）
+    ↓
+  safety_check（安全检查 — 失败则立即返回 rejected）
+    ↓
+  返回 job_id + turn_id，状态为 "processing"
+    ↓
+【异步阶段 — 后台执行，5-60s】
+  call_multimodal_model（多模态模型 text+image -> 结果图）
+    ↓
+  visual_qa（质量检查）
+    ↓
+  persist_turn（持久化）
+    ↓
+  通过 WebSocket/SSE 推送结果
+```
+
+#### 多模型模式
 
 ```text
 【同步阶段 — 用户等待，<3s】
@@ -1190,7 +909,7 @@ Worker 加载 turn 和 session
 
 | 步骤 | 超时时间 | 超时处理 |
 |---|---|---|
-| run_image_tool | 60s | 降级到备选模型 |
+| call_multimodal_model / run_image_tool | 60s | 降级到备选模型（单模型：降级到备选多模态模型；多模型：降级到备选图像模型） |
 | visual_qa | 10s | 跳过 QA，标记为 qa_passed |
 | 整体 job | 120s | 标记为 failed，通知用户 |
 | 用户取消 | 立即 | 停止后续节点 |
@@ -1308,20 +1027,21 @@ user_feedback
 ### 14.1 第一阶段：可靠 MVP
 
 - 实现 project、session、turn、image、job 数据模型。
-- 接入一个图像生成/编辑模型。
+- 接入一个多模态大模型（如豆包 Seedream 5.0），实现单模型模式闭环。
 - 支持异步 job。
 - 支持历史版本、撤销、重做。
-- 实现基础 Prompt Rewrite。
-- 保存每轮输入、输出、prompt、模型参数。
+- 实现基础安全检查 + Visual QA。
+- 保存每轮输入、输出、模型参数。
+- **不需要** Prompt Rewrite / 意图分类 / 模型路由（单模型模式下这些由模型内生处理）。
 
-### 14.2 第二阶段：可控编辑
+### 14.2 第二阶段：可控编辑与多模型扩展
 
 - 支持局部 mask。
 - 支持参考图。
-- 接入多模型 router。
-- 实现 Visual QA。
-- 自动重试一次。
+- 可选接入多模型 router（当单模型不能满足特定编辑需求时）。
+- 完善 Visual QA（自动重试策略优化）。
 - 支持版本对比。
+- 实现 Prompt Rewrite + 意图分类（多模型模式）。
 
 ### 14.3 第三阶段：产品化
 
@@ -1389,7 +1109,11 @@ S3 / R2 / OSS
 +
 Redis Queue / Celery / Dramatiq
 +
-Gemini 3.1 Flash Image（主模型，多轮编辑 + 文生图）
+# 单模型模式起步（推荐）
+豆包 Seedream 5.0（主模型，原生多轮编辑 + 文生图，text+image in, image out）
++
+# 多模型模式扩展（按需）
+Gemini 3.1 Flash Image（备选模型，多轮编辑 + 文生图）
 +
 ComfyUI / Flux（局部 inpainting、ControlNet 条件控制高级编辑）
 +

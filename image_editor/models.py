@@ -139,11 +139,20 @@ class EditResult(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class UploadResponse(BaseModel):
+    image_id: str
+    image_url: str
+    filename: str
+    width: int = 0
+    height: int = 0
+
+
 class CreateTurnRequest(BaseModel):
     instruction: str
     current_turn_id: Optional[str] = None
     reference_image_ids: list[str] = Field(default_factory=list)
     mask_image_id: Optional[str] = None
+    uploaded_image_id: Optional[str] = None
     options: dict = Field(default_factory=dict)
 
 
@@ -184,6 +193,8 @@ class SessionResponse(BaseModel):
     session_id: str
     project_id: str
     current_turn_id: Optional[str] = None
+    can_undo: bool = False
+    can_redo: bool = False
     turns: list[TurnDetailResponse] = Field(default_factory=list)
     created_at: str
     updated_at: str

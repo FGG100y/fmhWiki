@@ -17,6 +17,19 @@ class DoubaoImageTool(ImageTool):
         self.output_dir = Path(config.image_tool.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def _save_result(self, image_data: dict) -> GenerateResult:
+        remote_url = image_data.get("url", "")
+        image_id = f"img_{uuid.uuid4().hex[:12]}"
+        local_path = self._download(remote_url, image_id)
+        return GenerateResult(
+            image_id=image_id,
+            image_url=remote_url,
+            seed=image_data.get("seed"),
+            width=image_data.get("width", 0),
+            height=image_data.get("height", 0),
+            metadata={"local_path": str(local_path)},
+        )
+
     async def generate(self, request: GenerateRequest) -> GenerateResult:
         metadata = request.metadata or {}
         resp = await self.client.generate(
@@ -28,19 +41,7 @@ class DoubaoImageTool(ImageTool):
             turn_id=metadata.get("turn_id"),
             purpose=metadata.get("purpose", "image_generate"),
         )
-
-        image_data = resp.get("data", [{}])[0]
-        image_id = f"img_{uuid.uuid4().hex[:12]}"
-        url = image_data.get("url", "")
-
-        local_path = self._download(url, image_id)
-        return GenerateResult(
-            image_id=image_id,
-            image_url=str(local_path),
-            seed=image_data.get("seed"),
-            width=image_data.get("width", 0),
-            height=image_data.get("height", 0),
-        )
+        return self._save_result(resp.get("data", [{}])[0])
 
     async def edit(self, request: EditRequest) -> EditResult:
         metadata = request.metadata or {}
@@ -53,18 +54,14 @@ class DoubaoImageTool(ImageTool):
             turn_id=metadata.get("turn_id"),
             purpose=metadata.get("purpose", "image_edit"),
         )
-
-        image_data = resp.get("data", [{}])[0]
-        image_id = f"img_{uuid.uuid4().hex[:12]}"
-        url = image_data.get("url", "")
-
-        local_path = self._download(url, image_id)
+        r = self._save_result(resp.get("data", [{}])[0])
         return EditResult(
-            image_id=image_id,
-            image_url=str(local_path),
-            seed=image_data.get("seed"),
-            width=image_data.get("width", 0),
-            height=image_data.get("height", 0),
+            image_id=r.image_id,
+            image_url=r.image_url,
+            seed=r.seed,
+            width=r.width,
+            height=r.height,
+            metadata=r.metadata,
         )
 
     async def inpaint(
@@ -88,40 +85,51 @@ class DoubaoImageTool(ImageTool):
             turn_id=meta.get("turn_id"),
             purpose=meta.get("purpose", "image_inpaint"),
         )
-
-        image_data = resp.get("data", [{}])[0]
-        image_id = f"img_{uuid.uuid4().hex[:12]}"
-        url = image_data.get("url", "")
-
-        local_path = self._download(url, image_id)
+        r = self._save_result(resp.get("data", [{}])[0])
         return EditResult(
-            image_id=image_id,
-            image_url=str(local_path),
-            seed=image_data.get("seed"),
-            width=image_data.get("width", 0),
-            height=image_data.get("height", 0),
+            image_id=r.image_id,
+            image_url=r.image_url,
+            seed=r.seed,
+            width=r.width,
+            height=r.height,
+            metadata=r.metadata,
         )
 
     def _parse_size(self, aspect_ratio: str) -> str:
+        seedream_sizes = {"2K", "4K"}
+        if aspect_ratio in seedream_sizes:
+            return aspect_ratio
         mapping = {
-            "1:1": "1024x1024",
-            "16:9": "1920x1080",
-            "9:16": "1080x1920",
-            "4:3": "1366x1024",
-            "3:4": "1024x1366",
+            "1:1": "2K",
+            "16:9": "2K",
+            "9:16": "2K",
+            "4:3": "2K",
+            "3:4": "2K",
         }
-        return mapping.get(aspect_ratio, "1024x1024")
+        return mapping.get(aspect_ratio, "2K")
 
     def _download(self, url: str, image_id: str) -> Path:
         """下载远程图片到本地（实际生产应上传到对象存储）"""
-        import httpx
+        import base64
 
         ext = ".png"
         local_path = self.output_dir / f"{image_id}{ext}"
         try:
-            resp = httpx.get(url, timeout=30)
-            resp.raise_for_status()
-            local_path.write_bytes(resp.content)
+            if url.startswith("data:"):
+                header, encoded = url.split(",", 1)
+                data = base64.b64decode(encoded)
+                if "image/jpeg" in header:
+                    ext = ".jpg"
+                elif "image/webp" in header:
+                    ext = ".webp"
+                local_path = self.output_dir / f"{image_id}{ext}"
+                local_path.write_bytes(data)
+            else:
+                import httpx
+
+                resp = httpx.get(url, timeout=30)
+                resp.raise_for_status()
+                local_path.write_bytes(resp.content)
         except Exception:
             local_path = self.output_dir / f"{image_id}.txt"
             local_path.write_text(f"模拟下载: {url}")
