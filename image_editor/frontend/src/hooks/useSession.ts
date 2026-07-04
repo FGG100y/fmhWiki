@@ -24,6 +24,9 @@ export interface SessionState {
   currentInstruction: string | null;
   uploadedImageId: string | null;
   uploadedImageUrl: string | null;
+  maskImageId: string | null;
+  maskImageUrl: string | null;
+  maskFilename: string | null;
   canUndo: boolean;
   canRedo: boolean;
 }
@@ -42,6 +45,9 @@ export function useSession() {
     currentInstruction: null,
     uploadedImageId: null,
     uploadedImageUrl: null,
+    maskImageId: null,
+    maskImageUrl: null,
+    maskFilename: null,
     canUndo: false,
     canRedo: false,
   });
@@ -119,11 +125,13 @@ export function useSession() {
       if (!sid) throw new Error("No session");
       setState((prev) => ({ ...prev, loading: true, error: null }));
       const uploadedImageId = state.uploadedImageId;
+      const maskImageId = state.maskImageId;
       try {
         const result = await executeTurn(sid, {
           instruction,
           current_turn_id: state.currentTurnId ?? undefined,
           uploaded_image_id: uploadedImageId ?? undefined,
+          mask_image_id: maskImageId ?? undefined,
         });
         
         // 如果返回了job_id，开始轮询job状态
@@ -137,6 +145,9 @@ export function useSession() {
                   ...prev,
                   uploadedImageId: null,
                   uploadedImageUrl: null,
+                  maskImageId: null,
+                  maskImageUrl: null,
+                  maskFilename: null,
                 }));
                 await refresh(sid);
                 return;
@@ -149,6 +160,9 @@ export function useSession() {
                 ...prev,
                 uploadedImageId: null,
                 uploadedImageUrl: null,
+                maskImageId: null,
+                maskImageUrl: null,
+                maskFilename: null,
               }));
               await refresh(sid);
             }
@@ -161,6 +175,9 @@ export function useSession() {
             ...prev,
             uploadedImageId: null,
             uploadedImageUrl: null,
+            maskImageId: null,
+            maskImageUrl: null,
+            maskFilename: null,
           }));
           await refresh(sid);
         }
@@ -172,7 +189,7 @@ export function useSession() {
         return { job_id: "", turn_id: "", error: msg };
       }
     },
-    [state.currentTurnId, state.uploadedImageId, refresh]
+    [state.currentTurnId, state.uploadedImageId, state.maskImageId, refresh]
   );
 
   const handleImageUpload = useCallback((imageId: string, imageUrl: string) => {
@@ -181,6 +198,24 @@ export function useSession() {
       uploadedImageId: imageId,
       uploadedImageUrl: imageUrl,
       currentInputUrl: imageUrl,
+    }));
+  }, []);
+
+  const handleMaskUpload = useCallback((imageId: string, _imageUrl: string) => {
+    setState((prev) => ({
+      ...prev,
+      maskImageId: imageId,
+      maskImageUrl: _imageUrl,
+      maskFilename: "已上传",
+    }));
+  }, []);
+
+  const clearMask = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      maskImageId: null,
+      maskImageUrl: null,
+      maskFilename: null,
     }));
   }, []);
 
@@ -302,5 +337,5 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, undo, redo, retry, cancelExecution };
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, undo, redo, retry, cancelExecution };
 }

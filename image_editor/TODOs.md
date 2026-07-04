@@ -73,7 +73,7 @@
 
 - [x] **无法下载 / 保存结果图** — `ImageViewer.tsx` 没有下载按钮，用户只能右键另存
 - [x] **图片无法放大查看** — 生成 2K/4K 图却挤在小面板，无 zoom/pan/全屏，无输入/输出滑动对比
-- [ ] **前端不支持 mask 局部编辑和参考图** — 后端 `mask_image_id` / `reference_image_ids` / `inpaint` 已就绪（`doubao_image.py`, `tools/mask.py`），但 `InstructionInput` 只能传一张起始图（与 P2「前端本地 mask 圈选」重复，此处强调后端已具备能力）
+- [x] **前端不支持 mask 局部编辑和参考图** — 后端 `mask_image_id` / `reference_image_ids` / `inpaint` 已就绪（`doubao_image.py`, `tools/mask.py`），但 `InstructionInput` 只能传一张起始图（与 P2「前端本地 mask 圈选」重复，此处强调后端已具备能力）
 - [x] **失败后无"重试"按钮** — 后端 `/replay` 已就绪（`api.py`），前端 timeline 只显示 failed（`TurnTimeline.tsx`），用户需手动重打指令
 - [ ] **无用户 / 鉴权 / 配额** — user_id 硬编码 `"default"`（`api.py`），多人共享命名空间，付费模型无限调用（与 P2「用户鉴权与配额」呼应）
 

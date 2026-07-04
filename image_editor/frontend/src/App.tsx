@@ -28,6 +28,9 @@ export default function App() {
     sendInstruction,
     selectTurn,
     handleImageUpload,
+    handleMaskUpload,
+    clearMask,
+    maskFilename,
     undo,
     redo,
     canUndo,
@@ -84,6 +87,9 @@ export default function App() {
             onSubmit={sendInstruction}
             loading={loading}
             onImageUpload={handleImageUpload}
+            onMaskUpload={handleMaskUpload}
+            maskFilename={maskFilename}
+            onClearMask={clearMask}
           />
         </div>
       </div>

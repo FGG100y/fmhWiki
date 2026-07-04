@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 interface Props {
   inputUrl: string | null;
@@ -85,6 +85,10 @@ async function shareImage(url: string): Promise<"shared" | "copied" | "failed"> 
   return copied ? "copied" : "failed";
 }
 
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 0.15;
+
 export default function ImageViewer({
   inputUrl,
   outputUrl,
@@ -93,6 +97,95 @@ export default function ImageViewer({
 }: Props) {
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const zoomState = useRef({
+    scale: 1,
+    x: 0,
+    y: 0,
+    dragging: false,
+    lastX: 0,
+    lastY: 0,
+    pinchDist: 0,
+    pinchScale: 1,
+  });
+
+  const applyTransform = useCallback(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    const { scale, x, y } = zoomState.current;
+    img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    img.style.cursor = scale > 1 ? "grab" : "default";
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    zoomState.current = { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0, pinchDist: 0, pinchScale: 1 };
+    applyTransform();
+  }, [applyTransform]);
+
+  useEffect(() => {
+    if (!zoomUrl) return;
+    resetZoom();
+  }, [zoomUrl, resetZoom]);
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const s = zoomState.current;
+    const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+    s.scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s.scale + delta));
+    if (s.scale <= 1) { s.x = 0; s.y = 0; }
+    applyTransform();
+  }, [applyTransform]);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    const s = zoomState.current;
+    if (s.scale <= 1) return;
+    s.dragging = true;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    if (imgRef.current) imgRef.current.style.cursor = "grabbing";
+  }, []);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    const s = zoomState.current;
+    if (!s.dragging) return;
+    s.x += e.clientX - s.lastX;
+    s.y += e.clientY - s.lastY;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+    applyTransform();
+  }, [applyTransform]);
+
+  const handlePointerUp = useCallback(() => {
+    zoomState.current.dragging = false;
+    if (imgRef.current) {
+      imgRef.current.style.cursor = zoomState.current.scale > 1 ? "grab" : "default";
+    }
+  }, []);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      zoomState.current.pinchDist = Math.hypot(dx, dy);
+      zoomState.current.pinchScale = zoomState.current.scale;
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      const s = zoomState.current;
+      s.scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s.pinchScale * (dist / s.pinchDist)));
+      if (s.scale <= 1) { s.x = 0; s.y = 0; }
+      applyTransform();
+    }
+  }, [applyTransform]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -191,7 +284,13 @@ export default function ImageViewer({
       )}
       {toast && <div className="toast">{toast}</div>}
       {zoomUrl && (
-        <div className="zoom-overlay" onClick={() => setZoomUrl(null)}>
+        <div
+          className="zoom-overlay"
+          onClick={() => setZoomUrl(null)}
+          onWheel={handleWheel}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+        >
           <button
             className="zoom-close"
             onClick={() => setZoomUrl(null)}
@@ -199,12 +298,23 @@ export default function ImageViewer({
           >
             ×
           </button>
-          <img
-            src={zoomUrl}
-            alt="放大预览"
-            className="zoom-image"
-            onClick={(e) => e.stopPropagation()}
-          />
+          <div className="zoom-hint">滚轮缩放 · 拖拽平移 · 双指手势</div>
+          <div
+            className="zoom-image-wrap"
+            ref={containerRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+          >
+            <img
+              ref={imgRef}
+              src={zoomUrl}
+              alt="放大预览"
+              className="zoom-image"
+              draggable={false}
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
         </div>
       )}
     </main>
