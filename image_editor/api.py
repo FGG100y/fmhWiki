@@ -303,8 +303,8 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
 
-    # 首次上传图片时，创建根 turn 代表原始图，使其出现在编辑历史中
-    if req.uploaded_image_id and not session.get("current_turn_id"):
+    # 上传图片时创建根 turn 代表原始图，使其出现在编辑历史中
+    if req.uploaded_image_id:
         uploaded_img = store.get_image(req.uploaded_image_id)
         if not uploaded_img:
             raise HTTPException(status_code=404, detail="uploaded image not found")
@@ -320,11 +320,14 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
             output_image_id=req.uploaded_image_id,
         )
         store.switch_current_turn(session_id, root_turn.turn_id)
+        parent_turn_id = root_turn.turn_id
+    else:
+        parent_turn_id = req.current_turn_id or session.get("current_turn_id")
 
     turn = store.create_turn(
         session_id=session_id,
         user_instruction=req.instruction,
-        parent_turn_id=req.current_turn_id or session.get("current_turn_id"),
+        parent_turn_id=parent_turn_id,
         status=JobStatus.queued.value,
     )
     if req.mask_image_id:

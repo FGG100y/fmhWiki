@@ -72,6 +72,19 @@ from image_editor.workflow import run_workflow
 logger = logging.getLogger(__name__)
 
 
+def _cleanup_gpu() -> None:
+    """释放 GPU 显存（Moebius 等本地模型用完后清理）"""
+    try:
+        import gc
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+    except ImportError:
+        pass
+
+
 @dramatiq.actor(queue_name="image_jobs", max_retries=3, min_backoff=10000, max_backoff=300000)
 def execute_workflow(
     session_id: str,
@@ -116,6 +129,8 @@ def execute_workflow(
             )
         finally:
             loop.close()
+            # 释放 GPU 显存，避免多轮推理后 OOM
+            _cleanup_gpu()
 
         # 检查结果
         if result.get("error"):
@@ -140,5 +155,5 @@ if __name__ == "__main__":
     # 启动 worker
     import dramatiq.cli
 
-    sys.argv = ["dramatiq", "image_editor.worker", "--processes", "1", "--threads", "4"]
+    sys.argv = ["dramatiq", "image_editor.worker", "--processes", "1", "--threads", "1"]
     dramatiq.cli.main()
