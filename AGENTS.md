@@ -1,55 +1,72 @@
 # AGENTS.md
 
-## Architecture
-
-**Seedream 5.0 单模型模式** — 所有图片操作统一走 `POST /api/v3/images/generations`。
-- 无当前图 → 文生图；有当前图 → 图生图。
-- seedream 本身是多模态的，**不需要额外的 LLM 做意图识别、prompt 改写或路由**。客户端只做 undo/redo 判断和透传用户指令。
-- **不引入独立 Visual QA / VLM 图像评估** — seedream 多模态生成时已内建质量把控（多模态大模型兜底）。`agents/visual_qa.py` 保留 `passed=True` 直通节点只是为维持 workflow 结构，**不是待补的功能缺口**，勿反复提「接入真实 Visual QA」。
-- `DoubaoLLM` 类仍存在于 `llm/client.py` 但未被任何 agent 导入使用。
-
 ## Setup & Run
 
-> **Python 环境：默认按 pyenv 处理。** 优先用 pyenv 虚拟环境（`image-editor`）里的 `python` 做验证/启动（如 `python -m image_editor.main`、`python -c "import image_editor.api"`），前端用 `npm run build` / `npm run dev`。下方 `uv ...` 命令仅在装了 `uv` 时可用；若发现本机既非 pyenv 也无 uv（例如 `python`/`uv` 都不可用或找不到虚拟环境），**先询问用户**该用哪种方式，不要擅自猜测或运行改依赖的命令（`pip install`、`uv sync` 等）。
-
 ```bash
-# 后端 (Python >= 3.11, uv)
+# 后端 (pyenv 虚拟环境 image-editor)
 cd image_editor
-uv sync                                 # 安装依赖
-uv run python -m image_editor.main      # 启动 localhost:8000
+python -m image_editor.main           # localhost:8000
 
-# 前端 (Node.js >= 18)
+# Worker（异步任务队列）
+python -m dramatiq image_editor.worker --processes 1 --threads 2
+
+# 前端
 cd image_editor/frontend
-npm install
-npm run dev                             # 启动 localhost:5173，API 代理到 8000
+npm run dev                            # localhost:5173, API proxy → 8000
 ```
 
-环境变量见 `.env.example`。**禁止直接读取 `.env` 文件**，变量名和默认值以 `.env.example` 为准。`ARK_API_KEY` 必填。
+- Python 3.11+, pyenv 虚拟环境 `image-editor`
+- **不要运行** `pip install` / `uv sync` / `npm install` 除非用户明确要求
+- 杀死所有 worker 后需显式指定 `--processes 1 --threads 2`，否则 dramatiq 默认 fork CPU 核数个进程，每份独立加载 Moebius 模型到 GPU 显存导致 OOM
 
-## Key Gotchas
+## Env
 
-- **`tools/__init__.py` 必须不为空** — 其中 `import doubao_image` 触发底部的 `registry.register()` 调用。如果该文件为空，所有工具未注册，workflow 会在 `run_image_tool` 报 `未知工具: doubao_generate`。
-- **图片 API 用相对路径** — `DoubaoImageClient` 的 `base_url` 以 `/v3` 结尾，请求路径 `images/generations`（无前导 `/`），最终 URL 为 `.../api/v3/images/generations`。
-- **`_download` 返回本地路径，但返回给前端的 URL 是远程 URL** — `DoubaoImageTool._save_result` 将 `image_url` 设为远程 URL（火山引擎 CDN），本地路径只写入 `metadata.local_path`。
-- **Workflow 是同步执行** — `/execute` 端点同步跑完整个 LangGraph workflow。生产环境需改为异步 Job Queue（见 TODOs.md P0）。
+`.env.example` 是来源。`ARK_API_KEY` 为 doubao 云服务必需；Moebius 本地 inpainting 不需要。关键变量：
 
-## Logging
+| 变量 | 作用 |
+|---|---|
+| `ARK_API_KEY` | 火山引擎 ARK（doubao 云服务），不配则云 API 返回 401 |
+| `MOEBIUS_ENABLED=true` | 启用本地 inpainting（需 GPU + Moebius 仓库） |
+| `MOEBIUS_HOME` | Moebius 仓库根目录（`git clone` 后路径） |
+| `MOEBIUS_WEIGHT_DIR` | 模型权重目录 |
 
-- 日志文件在项目根目录 `logs/app.log`（`main.py` 启动时自动创建）。
-- `RotatingFileHandler`，单文件 5MB，保留 3 个备份。
-- `watchfiles`/`asyncio`/`httpx` 等第三方库的 DEBUG 日志已被屏蔽。
+## Architecture
 
-## Golden Rules (记过簿)
+**Seedream 5.0 单模型 + 本地 Moebius 双模式** — 不再只有云服务。
 
-- **永远先读 README 和 AGENTS.md ** — 项目的启动、验证、构建方式以 README 为准。不要自己想当然地跑命令。不知道怎么做时先读文档，不要猜。
-- **禁止运行任何修改环境/依赖的命令** — 包括但不限于 `pip install`、`uv pip install`、`uv sync`、`npm install`（除非用户明确要求）。`uv run` 本身不会改依赖，可以用于验证。
-- **对应到本文的 Setup & Run** — 启动后端是 `uv run python -m image_editor.main`，不是 import 检查或其它方式。前端的启动方式是 `npm run dev`，写在 `frontend/package.json` 里。
+- `tools/router.py` 根据 `has_image` / `has_mask` 推断任务类型：`generate`（文生图）→ `edit`（图生图）→ `inpaint`（局部重绘）
+- 每个任务类型有候选工具列表，按 `priority` 降序选：
+  - `inpaint` → `moebius_inpaint` (priority 10, 本地 GPU) > `doubao_inpaint` (0, 云)
+  - `edit` → `doubao_edit` (云)
+  - `generate` → `doubao_generate` (云)
+- 本地候选失败（OOM / 模型错误）自动 fallback 到云服务
+- **`tools/__init__.py` 必须不为空** — 其中的 `import` 触发 `registry.register()`。空文件 = 所有工具未注册
 
-## Testing & Verification
+## Storage & Workflow
 
-- 无自动化测试、无 lint、无 typecheck、无 CI。
-- `image_editor/TODOs.md` 中有 4 条**功能验证清单**（文生图、图生图、版本分支、undo/redo），每次改完代码应手动跑一遍。
+- 存储：内存 `MemoryStore` / Postgres 双实现（`storage.py`），通过 `DATABASE_URL` 环境变量切换
+- Workflow 引擎：LangGraph `StateGraph`（`workflow.py`），节点顺序：`load_session → safety_check → enhance_prompt → run_image_tool → visual_qa → persist_turn`
+- 执行：Dramatiq 异步 Job Queue（`worker.py`），API 立即返回 `job_id`，前端轮询
+- **Workflow 可能中途失败（OOM / API 401），`persist_turn` 未执行则 turn 缺少 `mask_image_id` / `output_image_id`**。`execute_turn` 和 `replay_turn` 在创建 turn 后已即时保存 `mask_image_id`，但仍可能缺 output
 
-## Production Migration
+## Frontend Gotchas
 
-见 `image_editor/TODOs.md`。核心三项：MemoryStore → Postgres，/execute → 异步 Job Queue，本地下载 → S3/OSS。
+- **叶子节点右侧误报"处理失败"**：已修复，`ImageViewer.tsx` 不再把 `!outputUrl && instruction` 当作失败
+- **多原图自动折叠**：`TurnTimeline.tsx` 中每个根节点（原图）有 `▼/▶` 折叠按钮，上传新图时旧分支自动收起
+- 重试按钮调 `/replay` 端点，用相同 instruction + mask 创建新 turn
+
+## GPU / Worker
+
+- **worker 进程数必须控制**：dramatiq 默认 fork CPU 核数个进程。每份独立加载 Moebius 模型进 GPU 显存。生产环境用 `--processes 1 --threads 2`
+- `worker.py` 中 `_cleanup_gpu()` 在每次 workflow 结束后调用 `torch.cuda.synchronize()` + `gc.collect()` + `torch.cuda.empty_cache()`。但只能释放缓存，**不能卸载模型参数本身**
+- Moebius OOM 可尝试降低 `MOEBIUS_RESOLUTION`（默认 512）
+
+## Moebius Client Bugs (记过簿)
+
+- **`_unpad_result` pad 模式内容偏移**：竖长图（1150×2048）用黑边填充到正方形后，`out.paste(resized, (left, top))` 会重复偏移内容。已修复为 pad 模式裁出原图区域再粘贴
+- 重新提交后如需生效，必须重启 worker 进程（pipeline 是惰性加载并缓存）
+
+## Testing
+
+- 无自动化测试、无 lint、无 typecheck、无 CI
+- 功能验证见 `image_editor/TODOs.md` 中 4 条链路（文生图、图生图、版本分支、undo/redo）
