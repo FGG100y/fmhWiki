@@ -8,6 +8,8 @@ import {
   replayTurn as apiReplay,
   getJob,
   cancelJob,
+  uploadImage,
+  deleteTurn as apiDeleteTurn,
   ExecuteResult,
   SessionResponse,
   TurnDetail,
@@ -27,6 +29,8 @@ export interface SessionState {
   maskImageId: string | null;
   maskImageUrl: string | null;
   maskFilename: string | null;
+  maskDrawingMode: boolean;
+  currentJobId: string | null;
   canUndo: boolean;
   canRedo: boolean;
 }
@@ -48,18 +52,50 @@ export function useSession() {
     maskImageId: null,
     maskImageUrl: null,
     maskFilename: null,
+    maskDrawingMode: false,
+    currentJobId: null,
     canUndo: false,
     canRedo: false,
   });
 
   const sessionIdRef = useRef<string | null>(null);
 
-  const refresh = useCallback(async (sid: string) => {
+  const refresh = useCallback(async (sid: string, showOutput = false) => {
     try {
       const data: SessionResponse = await getSession(sid);
       const currentTurn = data.turns.find(
         (t) => t.turn_id === data.current_turn_id
       );
+      // 只把「已成功产出结果」的子节点视为真正的子节点；
+      // 失败/排队/生成中的 turn 没有 output，不能让当前结果被误判为「有子节点的历史结果」。
+      const realChildren = data.turns
+        .filter(
+          (t) => t.parent_turn_id === data.current_turn_id && !!t.output_image_url
+        )
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const hasChild = realChildren.length > 0;
+      const outputUrl = currentTurn?.output_image_url ?? null;
+      const inputUrl = currentTurn?.input_image_url ?? null;
+      const isRoot = inputUrl === outputUrl; // 根 turn，output==input，没意义
+      const childOutputUrl = hasChild
+        ? realChildren[0].output_image_url
+        : null;
+      // 统一逻辑：左侧始终显示「当前选中 turn 的结果」，右侧显示其第一个子节点的结果（如有）
+      let currentOutputUrl: string | null;
+      let currentInputUrl: string | null;
+      if (isRoot) {
+        // 根 turn：左侧=原始图，右侧=第一个修改结果
+        currentInputUrl = inputUrl;
+        currentOutputUrl = childOutputUrl;
+      } else if (showOutput) {
+        // 刚完成编辑：左侧=输入，右侧=新结果（对比视图）
+        currentInputUrl = inputUrl;
+        currentOutputUrl = outputUrl;
+      } else {
+        // 浏览历史：左侧=选中结果，右侧=第一个子节点结果（如有）
+        currentInputUrl = outputUrl;
+        currentOutputUrl = childOutputUrl;
+      }
       setState((prev) => ({
         ...prev,
         sessionId: data.session_id,
@@ -67,8 +103,8 @@ export function useSession() {
         turns: data.turns,
         loading: false,
         error: null,
-        currentOutputUrl: currentTurn?.output_image_url ?? prev.currentOutputUrl,
-        currentInputUrl: currentTurn?.input_image_url ?? null,
+        currentOutputUrl,
+        currentInputUrl,
         currentInstruction: currentTurn?.user_instruction ?? null,
         canUndo: data.can_undo,
         canRedo: data.can_redo,
@@ -136,6 +172,7 @@ export function useSession() {
         
         // 如果返回了job_id，开始轮询job状态
         if (result.job_id) {
+          setState((prev) => ({ ...prev, currentJobId: result.job_id }));
           const pollJob = async () => {
             try {
               const job = await getJob(result.job_id);
@@ -148,8 +185,9 @@ export function useSession() {
                   maskImageId: null,
                   maskImageUrl: null,
                   maskFilename: null,
+                  currentJobId: null,
                 }));
-                await refresh(sid);
+                await refresh(sid, true);
                 return;
               }
               // 继续轮询
@@ -163,6 +201,7 @@ export function useSession() {
                 maskImageId: null,
                 maskImageUrl: null,
                 maskFilename: null,
+                currentJobId: null,
               }));
               await refresh(sid);
             }
@@ -179,7 +218,7 @@ export function useSession() {
             maskImageUrl: null,
             maskFilename: null,
           }));
-          await refresh(sid);
+          await refresh(sid, true);
         }
         
         return result;
@@ -216,8 +255,48 @@ export function useSession() {
       maskImageId: null,
       maskImageUrl: null,
       maskFilename: null,
+      maskDrawingMode: false,
     }));
   }, []);
+
+  const startMaskDrawing = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      maskDrawingMode: true,
+    }));
+  }, []);
+
+  const cancelMaskDrawing = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      maskDrawingMode: false,
+    }));
+  }, []);
+
+  const handleMaskDrawingConfirm = useCallback(
+    async (blob: Blob) => {
+      const file = new File([blob], `mask_${Date.now()}.png`, {
+        type: "image/png",
+      });
+      try {
+        const resp = await uploadImage(file);
+        setState((prev) => ({
+          ...prev,
+          maskImageId: resp.image_id,
+          maskImageUrl: resp.image_url,
+          maskFilename: "已绘制",
+          maskDrawingMode: false,
+        }));
+      } catch (err) {
+        setState((prev) => ({
+          ...prev,
+          maskDrawingMode: false,
+          error: err instanceof Error ? err.message : "Mask 上传失败",
+        }));
+      }
+    },
+    []
+  );
 
   const undo = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -262,7 +341,7 @@ export function useSession() {
               const job = await getJob(result.job_id);
               if (job.status === "succeeded" || job.status === "failed") {
                 // job完成，刷新session数据
-                await refresh(sid);
+                await refresh(sid, true);
                 if (result.error) {
                   setState((prev) => ({ ...prev, error: result.error ?? null }));
                 }
@@ -279,7 +358,7 @@ export function useSession() {
           setTimeout(pollJob, 1000);
         } else {
           // 没有job_id（同步执行），直接刷新
-          await refresh(sid);
+          await refresh(sid, true);
         }
         
         if (result.error) {
@@ -322,7 +401,7 @@ export function useSession() {
     async (jobId: string): Promise<void> => {
       try {
         await cancelJob(jobId);
-        // 取消成功后刷新session状态
+        setState((prev) => ({ ...prev, currentJobId: null, loading: false }));
         const sid = sessionIdRef.current;
         if (sid) {
           await refresh(sid);
@@ -337,5 +416,22 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, undo, redo, retry, cancelExecution };
+  const deleteTurn = useCallback(
+    async (turnId: string) => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      try {
+        await apiDeleteTurn(sid, turnId);
+        await refresh(sid);
+      } catch (e: unknown) {
+        setState((prev) => ({
+          ...prev,
+          error: e instanceof Error ? e.message : "Delete failed",
+        }));
+      }
+    },
+    [refresh]
+  );
+
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, startMaskDrawing, cancelMaskDrawing, handleMaskDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn };
 }

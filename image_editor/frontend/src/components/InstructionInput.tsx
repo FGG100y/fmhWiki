@@ -8,6 +8,11 @@ interface Props {
   onMaskUpload: (imageId: string, imageUrl: string) => void;
   maskFilename: string | null;
   onClearMask: () => void;
+  maskDrawingMode: boolean;
+  onStartMaskDrawing: () => void;
+  hasInputImage: boolean;
+  currentJobId: string | null;
+  onCancel: (jobId: string) => void;
 }
 
 export default function InstructionInput({
@@ -17,6 +22,11 @@ export default function InstructionInput({
   onMaskUpload,
   maskFilename,
   onClearMask,
+  maskDrawingMode,
+  onStartMaskDrawing,
+  hasInputImage,
+  currentJobId,
+  onCancel,
 }: Props) {
   const [value, setValue] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -28,6 +38,7 @@ export default function InstructionInput({
   const handleSubmit = () => {
     const trimmed = value.trim();
     if (!trimmed || loading) return;
+    if (maskDrawingMode) return;
     onSubmit(trimmed);
     setValue("");
     setUploadedFilename(null);
@@ -98,7 +109,7 @@ export default function InstructionInput({
       <button
         className={`btn-upload btn-mask ${maskFilename ? "btn-mask-active" : ""}`}
         onClick={() => maskRef.current?.click()}
-        disabled={loading || maskUploading}
+        disabled={loading || maskUploading || maskDrawingMode}
         title="上传 Mask 图片（白色区域=编辑区域）"
       >
         {maskUploading
@@ -107,7 +118,15 @@ export default function InstructionInput({
           ? `Mask: ${maskFilename}`
           : "上传 Mask"}
       </button>
-      {maskFilename && (
+      <button
+        className={`btn-upload btn-mask-draw ${maskDrawingMode ? "btn-mask-active" : ""}`}
+        onClick={onStartMaskDrawing}
+        disabled={loading || !hasInputImage}
+        title="在图片上绘制 Mask（白色区域=编辑区域）"
+      >
+        {maskDrawingMode ? "绘制中…" : "绘制 Mask"}
+      </button>
+      {maskFilename && !maskDrawingMode && (
         <button
           className="btn-mask-clear"
           onClick={onClearMask}
@@ -125,20 +144,32 @@ export default function InstructionInput({
             ? `已选 ${uploadedFilename}，输入修图指令…`
             : maskFilename
             ? `已上传 Mask，输入局部编辑指令…`
+            : maskDrawingMode
+            ? "请在左侧图片上绘制 Mask，完成后点击确认…"
             : "请输入修图指令，例如：把背景换成海边日落…"
         }
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={loading}
+        disabled={loading || maskDrawingMode}
       />
-      <button
-        className="btn-send"
-        onClick={handleSubmit}
-        disabled={loading || !value.trim()}
-      >
-        {loading ? "处理中…" : "发送"}
-      </button>
+      {loading && currentJobId ? (
+        <button
+          className="btn-cancel"
+          onClick={() => onCancel(currentJobId)}
+          title="取消当前任务"
+        >
+          取消
+        </button>
+      ) : (
+        <button
+          className="btn-send"
+          onClick={handleSubmit}
+          disabled={loading || maskDrawingMode || !value.trim()}
+        >
+          发送
+        </button>
+      )}
     </div>
   );
 }

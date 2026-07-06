@@ -21,6 +21,16 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+
+class TruncatingFilter(logging.Filter):
+    """截断过长日志消息（避免 base64 图片撑满日志）"""
+    MAX_LEN = 500
+    def filter(self, record: logging.LogRecord) -> bool:
+        if len(record.msg) > self.MAX_LEN:
+            record.msg = f"{record.msg[:self.MAX_LEN]}...<truncated {len(record.msg) - self.MAX_LEN} chars>"
+        return True
+
+
 _logs_dir = Path(__file__).parent.parent / "logs"
 _logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -34,10 +44,12 @@ _file_handler = RotatingFileHandler(
 )
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(_log_fmt)
+_file_handler.addFilter(TruncatingFilter())
 
 _console_handler = logging.StreamHandler()
 _console_handler.setLevel(logging.INFO)
 _console_handler.setFormatter(_log_fmt)
+_console_handler.addFilter(TruncatingFilter())
 
 _root_logger = logging.getLogger()
 _root_logger.setLevel(logging.DEBUG)

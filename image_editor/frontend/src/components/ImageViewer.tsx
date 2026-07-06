@@ -1,10 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import MaskCanvas from "./MaskCanvas";
 
 interface Props {
   inputUrl: string | null;
   outputUrl: string | null;
   instruction: string | null;
   loading: boolean;
+  maskDrawingMode: boolean;
+  onMaskDrawingConfirm: (maskBlob: Blob) => void;
+  onMaskDrawingCancel: () => void;
 }
 
 async function fetchAsBlob(url: string): Promise<Blob> {
@@ -94,6 +98,9 @@ export default function ImageViewer({
   outputUrl,
   instruction,
   loading,
+  maskDrawingMode,
+  onMaskDrawingConfirm,
+  onMaskDrawingCancel,
 }: Props) {
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -127,6 +134,11 @@ export default function ImageViewer({
   useEffect(() => {
     if (!zoomUrl) return;
     resetZoom();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setZoomUrl(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [zoomUrl, resetZoom]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -207,16 +219,27 @@ export default function ImageViewer({
     <main className="viewer">
       <div className="viewer-grid">
         <div className="image-panel">
-          <div className="image-label">输入图片</div>
+          <div className="image-label">
+            输入图片
+            {maskDrawingMode && <span className="mask-drawing-badge">绘制 Mask 中</span>}
+          </div>
           <div className="image-container">
-            {inputUrl ? (
-              <img
-                src={inputUrl}
-                alt="输入图片"
-                className="zoomable"
-                onClick={() => setZoomUrl(inputUrl)}
-                title="点击放大"
-              />
+            {(inputUrl || outputUrl) ? (
+              maskDrawingMode ? (
+                <MaskCanvas
+                  imageUrl={inputUrl || outputUrl || ""}
+                  onConfirm={onMaskDrawingConfirm}
+                  onCancel={onMaskDrawingCancel}
+                />
+              ) : (
+                <img
+                  src={inputUrl || ""}
+                  alt="输入图片"
+                  className="zoomable"
+                  onClick={() => setZoomUrl(inputUrl)}
+                  title="点击放大"
+                />
+              )
             ) : (
               <div className="image-placeholder">
                 {loading ? "生成中…" : "首轮将从文字生成图片"}
@@ -266,8 +289,6 @@ export default function ImageViewer({
               <div className="image-placeholder">
                 {loading ? (
                   <span className="spinner" />
-                ) : instruction ? (
-                  "处理失败"
                 ) : (
                   "输入指令开始修图"
                 )}

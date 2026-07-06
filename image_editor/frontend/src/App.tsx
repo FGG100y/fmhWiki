@@ -31,11 +31,18 @@ export default function App() {
     handleMaskUpload,
     clearMask,
     maskFilename,
+    maskDrawingMode,
+    startMaskDrawing,
+    cancelMaskDrawing,
+    handleMaskDrawingConfirm,
     undo,
     redo,
     canUndo,
     canRedo,
     retry,
+    deleteTurn,
+    currentJobId,
+    cancelExecution,
   } = useSession();
 
   return (
@@ -75,6 +82,7 @@ export default function App() {
           currentTurnId={currentTurnId}
           onSelect={selectTurn}
           onRetry={retry}
+          onDelete={deleteTurn}
         />
         <div className="main-area">
           <ImageViewer
@@ -82,6 +90,9 @@ export default function App() {
             outputUrl={currentOutputUrl}
             instruction={currentInstruction}
             loading={loading}
+            maskDrawingMode={maskDrawingMode}
+            onMaskDrawingConfirm={handleMaskDrawingConfirm}
+            onMaskDrawingCancel={cancelMaskDrawing}
           />
           <InstructionInput
             onSubmit={sendInstruction}
@@ -90,6 +101,11 @@ export default function App() {
             onMaskUpload={handleMaskUpload}
             maskFilename={maskFilename}
             onClearMask={clearMask}
+            maskDrawingMode={maskDrawingMode}
+            onStartMaskDrawing={startMaskDrawing}
+            hasInputImage={!!currentInputUrl}
+            currentJobId={currentJobId}
+            onCancel={cancelExecution}
           />
         </div>
       </div>

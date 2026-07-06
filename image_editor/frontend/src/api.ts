@@ -166,3 +166,13 @@ export function cancelJob(jobId: string): Promise<{ job_id: string; status: stri
     { method: "POST" }
   );
 }
+
+export function deleteTurn(
+  sessionId: string,
+  turnId: string
+): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(
+    `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`,
+    { method: "DELETE" }
+  );
+}

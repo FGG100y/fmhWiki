@@ -41,13 +41,90 @@ class ImageToolConfig:
 
 
 @dataclass
+class MoebiusConfig:
+    """Moebius 本地 inpainting 模型配置"""
+
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("MOEBIUS_ENABLED", "false").lower() == "true"
+    )
+    weight_dir: str = field(
+        default_factory=lambda: os.getenv("MOEBIUS_WEIGHT_DIR", "")
+    )
+    variant: str = field(
+        default_factory=lambda: os.getenv("MOEBIUS_VARIANT", "pretrained")
+    )
+    vae_weight: str = field(default_factory=lambda: os.getenv("MOEBIUS_VAE_WEIGHT", ""))
+    model_config: str = field(
+        default_factory=lambda: os.getenv("MOEBIUS_MODEL_CONFIG", "")
+    )
+    device: str = field(
+        default_factory=lambda: os.getenv("MOEBIUS_DEVICE", "cuda")
+    )
+    resolution: int = field(
+        default_factory=lambda: int(os.getenv("MOEBIUS_RESOLUTION", "512"))
+    )
+    num_steps: int = field(
+        default_factory=lambda: int(os.getenv("MOEBIUS_NUM_STEPS", "20"))
+    )
+    cfg_scale: float = field(
+        default_factory=lambda: float(os.getenv("MOEBIUS_CFG", "2.5"))
+    )
+    paste: bool = True
+    compensate: bool = False
+
+    @property
+    def model_weight(self) -> str:
+        """根据 weight_dir + variant 自动拼接模型权重路径"""
+        import pathlib
+
+        if not self.weight_dir:
+            return ""
+        weight_dir = os.path.expanduser(self.weight_dir)
+        return str(pathlib.Path(weight_dir) / self.variant / "diffusion_pytorch_model.bin")
+
+    @property
+    def resolved_vae_weight(self) -> str:
+        """vae 权重路径，若未单独指定则从 weight_dir 推断"""
+        import pathlib
+
+        if self.vae_weight:
+            return os.path.expanduser(self.vae_weight)
+        if self.weight_dir:
+            weight_dir = os.path.expanduser(self.weight_dir)
+            return str(pathlib.Path(weight_dir).parent / "vae")
+        return ""
+
+
+@dataclass
+class LaMaConfig:
+    """LaMa 物体移除模型配置"""
+
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("LAMA_ENABLED", "false").lower() == "true"
+    )
+
+
+@dataclass
 class AppConfig:
     doubao: DoubaoConfig = field(default_factory=DoubaoConfig)
+    moebius: MoebiusConfig = field(default_factory=MoebiusConfig)
+    lama: LaMaConfig = field(default_factory=LaMaConfig)
     image_tool: ImageToolConfig = field(default_factory=ImageToolConfig)
     debug: bool = field(
         default_factory=lambda: os.getenv("DEBUG", "false").lower() == "true"
     )
     max_qa_retries: int = 2
+
+    def enabled_providers(self) -> set[str]:
+        """返回当前可用的 provider 集合"""
+        providers: set[str] = set()
+        if self.doubao.api_key:
+            providers.add("doubao")
+        if self.moebius.enabled and self.moebius.weight_dir:
+            providers.add("moebius")
+        if self.lama.enabled:
+            providers.add("lama")
+        return providers
 
 
 config = AppConfig()

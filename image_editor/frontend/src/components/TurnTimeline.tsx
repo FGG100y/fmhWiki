@@ -6,6 +6,7 @@ interface Props {
   currentTurnId: string | null;
   onSelect: (turnId: string) => void;
   onRetry: (turnId: string) => void;
+  onDelete: (turnId: string) => void;
 }
 
 interface FlatNode {
@@ -59,7 +60,7 @@ function BranchLines({ depth, isLast }: { depth: number; isLast: boolean }) {
   );
 }
 
-export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry }: Props) {
+export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, onDelete }: Props) {
   const flatNodes = useMemo(() => buildTree(turns), [turns]);
 
   if (turns.length === 0) {
@@ -111,6 +112,18 @@ export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry }
                   ↻ 重试
                 </button>
               )}
+              <button
+                className="btn-delete-turn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm("确定删除这条记录？")) {
+                    onDelete(node.turn.turn_id);
+                  }
+                }}
+                title="删除此记录"
+              >
+                ×
+              </button>
             </div>
           </li>
         ))}

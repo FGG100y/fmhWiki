@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
+from pathlib import Path
 
 # 确保项目根目录在路径中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,6 +15,51 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+class TruncatingFilter(logging.Filter):
+    """截断过长日志消息（避免 base64 图片撑满日志）"""
+    MAX_LEN = 500
+    def filter(self, record: logging.LogRecord) -> bool:
+        if len(record.msg) > self.MAX_LEN:
+            record.msg = f"{record.msg[:self.MAX_LEN]}...<truncated {len(record.msg) - self.MAX_LEN} chars>"
+        return True
+
+
+# ── Worker 日志配置 ────────────────────────────────────────────────────────────
+_logs_dir = Path(__file__).parent.parent / "logs"
+_logs_dir.mkdir(parents=True, exist_ok=True)
+
+_log_fmt = logging.Formatter(
+    "%(asctime)s | %(levelname)-7s | %(name)s:%(lineno)d | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+_file_handler = RotatingFileHandler(
+    _logs_dir / "app.log", maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(_log_fmt)
+_file_handler.addFilter(TruncatingFilter())
+
+_console_handler = logging.StreamHandler()
+_console_handler.setLevel(logging.INFO)
+_console_handler.setFormatter(_log_fmt)
+_console_handler.addFilter(TruncatingFilter())
+
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+_root_logger.addHandler(_file_handler)
+_root_logger.addHandler(_console_handler)
+
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
+logging.getLogger("dramatiq").setLevel(logging.WARNING)
+# ────────────────────────────────────────────────────────────────────────────────
 
 import dramatiq
 
@@ -38,6 +85,7 @@ def execute_workflow(
     current_image_url: str | None = None,
     reference_image_ids: list[str] | None = None,
     mask_image_id: str | None = None,
+    mask_image_url: str | None = None,
 ) -> None:
     """执行 LangGraph workflow 并更新任务状态"""
     logger.info("execute_workflow: job=%s turn=%s instruction=%s", job_id, turn_id, instruction[:80])
@@ -62,6 +110,7 @@ def execute_workflow(
                     current_image_url=current_image_url,
                     reference_image_ids=reference_image_ids,
                     mask_image_id=mask_image_id,
+                    mask_image_url=mask_image_url,
                     turn_id=turn_id,
                 )
             )

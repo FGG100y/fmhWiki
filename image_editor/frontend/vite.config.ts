@@ -11,6 +11,8 @@ export default defineConfig({
       "/turns": "http://127.0.0.1:8000",
       "/jobs": "http://127.0.0.1:8000",
       "/upload": "http://127.0.0.1:8000",
+      "/output": "http://127.0.0.1:8000",
+      "/uploads": "http://127.0.0.1:8000",
     },
   },
   build: {

@@ -121,6 +121,18 @@ async def switch_current_turn(session_id: str, req: SwitchTurnRequest) -> dict:
     return {"current_turn_id": req.turn_id}
 
 
+@app.delete("/sessions/{session_id}/turns/{turn_id}")
+async def delete_turn(session_id: str, turn_id: str) -> dict:
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session not found")
+    turn = store.get_turn(turn_id)
+    if not turn or turn.session_id != session_id:
+        raise HTTPException(status_code=404, detail="turn not found in session")
+    store.delete_turn(turn_id)
+    return {"deleted": True}
+
+
 # ---- Job ----
 
 
@@ -315,6 +327,8 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
         parent_turn_id=req.current_turn_id or session.get("current_turn_id"),
         status=JobStatus.queued.value,
     )
+    if req.mask_image_id:
+        store.update_turn(turn.turn_id, mask_image_id=req.mask_image_id)
     job_id = store.create_job(session_id=session_id, turn_id=turn.turn_id)
 
     # 确定当前图片：上传图片优先，否则用上一轮的输出
@@ -337,6 +351,13 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
             else None
         )
 
+    # 解析 mask_image_id → mask_image_url
+    mask_image_url = None
+    if req.mask_image_id:
+        mask_img = store.get_image(req.mask_image_id)
+        if mask_img:
+            mask_image_url = mask_img.get("url", "")
+
     # 入队异步任务
     from image_editor.worker import execute_workflow
 
@@ -352,6 +373,7 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
         current_image_url=current_image_url,
         reference_image_ids=req.reference_image_ids,
         mask_image_id=req.mask_image_id,
+        mask_image_url=mask_image_url,
     )
 
     logger.info("execute_turn: queued job=%s turn=%s", job_id, turn.turn_id)
@@ -395,12 +417,21 @@ async def replay_turn(session_id: str, req: ReplayTurnRequest) -> dict:
         },
     )
 
+    # 解析 mask_image_id → mask_image_url
+    mask_image_url = None
+    if replay_req.mask_image_id:
+        mask_img = store.get_image(replay_req.mask_image_id)
+        if mask_img:
+            mask_image_url = mask_img.get("url", "")
+
     turn = store.create_turn(
         session_id=session_id,
         user_instruction=replay_req.instruction,
         parent_turn_id=replay_req.current_turn_id,
         status=JobStatus.running.value,
     )
+    if replay_req.mask_image_id:
+        store.update_turn(turn.turn_id, mask_image_id=replay_req.mask_image_id)
     job_id = store.create_job(session_id=session_id, turn_id=turn.turn_id)
 
     try:
@@ -414,6 +445,7 @@ async def replay_turn(session_id: str, req: ReplayTurnRequest) -> dict:
             current_image_url=current_image_url,
             reference_image_ids=replay_req.reference_image_ids,
             mask_image_id=replay_req.mask_image_id,
+            mask_image_url=mask_image_url,
             turn_id=turn.turn_id,
         )
         if result.get("error"):

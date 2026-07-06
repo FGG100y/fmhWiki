@@ -18,5 +18,31 @@ dependencies = [
     "redis>=5.0,<6.0",
 ]
 
+[project.optional-dependencies]
+# 本地模型支持（按需安装）
+local-lama = [
+    "simple-lama-inpainting>=0.1",
+]
+local-moebius = [
+    "torch>=2.0",
+    "diffusers>=0.30",
+    "transformers>=4.0",
+    "accelerate>=0.25",
+    "safetensors>=0.4",
+    "omegaconf>=2.2",
+    "opencv-python>=4.0",
+    "timm>=1.0",
+    "toml>=0.10",
+    "orjson>=3.0",
+    "pandas>=2.0",
+    "scipy>=1.0",
+    "lpips>=0.1",
+    "tensorboard>=2.0",
+    "flash-linear-attention[cuda]>=0.3.2",
+]
+local-all = [
+    "image-editor[local-lama,local-moebius]",
+]
+
 [tool.setuptools.packages.find]
 include = ["image_editor*"]

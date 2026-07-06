@@ -158,6 +158,21 @@ class MemoryStore:
             return None
         return self._to_turn_detail(turn)
 
+    def delete_turn(self, turn_id: str) -> bool:
+        turn = self._turns.get(turn_id)
+        if not turn:
+            return False
+        session = self._sessions.get(turn.session_id)
+        if session:
+            if session.get("current_turn_id") == turn_id:
+                session["current_turn_id"] = turn.parent_turn_id
+            redo_stack = session.get("redo_stack") or []
+            if turn_id in redo_stack:
+                redo_stack.remove(turn_id)
+            session["updated_at"] = datetime.utcnow().isoformat()
+        del self._turns[turn_id]
+        return True
+
     # ---- Job ----
 
     def create_job(self, session_id: str, turn_id: str) -> str:
@@ -447,13 +462,33 @@ class PostgresStore:
     def get_turn(self, turn_id: str) -> Optional[TurnRecord]:
         query = "SELECT * FROM turns WHERE turn_id = %s"
         result = self._execute(query, (turn_id,), fetch=True)
-        return TurnRecord(**dict(result[0])) if result else None
+        if result:
+            turn_data = dict(result[0])
+            if "created_at" in turn_data and hasattr(turn_data["created_at"], "isoformat"):
+                turn_data["created_at"] = turn_data["created_at"].isoformat()
+            return TurnRecord(**turn_data)
+        return None
 
     def get_turn_detail(self, turn_id: str) -> Optional[TurnDetailResponse]:
         turn = self.get_turn(turn_id)
         if not turn:
             return None
         return self._to_turn_detail(dict(turn))
+
+    def delete_turn(self, turn_id: str) -> bool:
+        turn = self.get_turn(turn_id)
+        if not turn:
+            return False
+        session = self.get_session(turn.session_id)
+        if session:
+            if session.get("current_turn_id") == turn_id:
+                self._execute("UPDATE sessions SET current_turn_id = %s WHERE session_id = %s", (turn.parent_turn_id, turn.session_id))
+            self._commit()
+        self._execute("DELETE FROM model_calls WHERE turn_id = %s", (turn_id,))
+        self._execute("DELETE FROM jobs WHERE turn_id = %s", (turn_id,))
+        self._execute("DELETE FROM turns WHERE turn_id = %s", (turn_id,))
+        self._commit()
+        return True
 
     # ---- Job ----
 

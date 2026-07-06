@@ -7,6 +7,7 @@ from image_editor.config import config
 from image_editor.llm.client import DoubaoImageClient
 from image_editor.models import EditRequest, EditResult, GenerateRequest, GenerateResult
 from image_editor.tools.base import ImageTool, registry
+from image_editor.tools.router import ToolMeta, register_tool_meta
 
 
 class DoubaoImageTool(ImageTool):
@@ -137,6 +138,18 @@ class DoubaoImageTool(ImageTool):
 
 
 # 注册工具
-registry.register("doubao_generate", DoubaoImageTool())
-registry.register("doubao_edit", DoubaoImageTool())
-registry.register("doubao_inpaint", DoubaoImageTool())
+_doubao_tool = DoubaoImageTool()
+registry.register("doubao_generate", _doubao_tool)
+registry.register("doubao_edit", _doubao_tool)
+registry.register("doubao_inpaint", _doubao_tool)
+
+# 注册元数据（云端兜底，priority 最低）
+register_tool_meta(
+    ToolMeta(name="doubao_generate", task_types=frozenset({"generate"}), is_local=False, priority=0)
+)
+register_tool_meta(
+    ToolMeta(name="doubao_edit", task_types=frozenset({"edit"}), is_local=False, priority=0)
+)
+register_tool_meta(
+    ToolMeta(name="doubao_inpaint", task_types=frozenset({"inpaint"}), is_local=False, priority=0)
+)
