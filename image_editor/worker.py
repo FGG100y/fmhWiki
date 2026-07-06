@@ -155,5 +155,5 @@ if __name__ == "__main__":
     # 启动 worker
     import dramatiq.cli
 
-    sys.argv = ["dramatiq", "image_editor.worker", "--processes", "1", "--threads", "1"]
+    sys.argv = ["dramatiq", "image_editor.worker", "--processes", "1", "--threads", "2"]
     dramatiq.cli.main()
