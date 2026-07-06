@@ -116,6 +116,28 @@ body {
   border-color: var(--danger);
 }
 
+.btn-collapse {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin-top: 2px;
+  transition: background 0.15s;
+}
+
+.btn-collapse:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .tree-branch {
   font-size: 13px;
   color: var(--text-muted);
