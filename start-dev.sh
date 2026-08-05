@@ -5,23 +5,22 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── 解析 Python：优先使用 pyenv 虚拟环境 image-editor ──
-PYTHON_BIN="${PYTHON_BIN:-}"
-if [[ -z "$PYTHON_BIN" ]] && command -v pyenv >/dev/null 2>&1; then
-  PYENV_PY="$(pyenv root)/versions/image-editor/bin/python"
-  if [[ -x "$PYENV_PY" ]]; then
-    PYTHON_BIN="$PYENV_PY"
-  fi
+# ── 解析 Python：默认用 uv（仓库根 .python-version / uv.lock），可用 PYTHON_BIN 覆盖为具体解释器 ──
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+  PY() { "$PYTHON_BIN" "$@"; }
+else
+  PY() { uv run "$@"; }
 fi
-PYTHON_BIN="${PYTHON_BIN:-python}"
 
-# ── 校验 npm ──
+# ── 校验 uv / npm ──
+if [[ -z "${PYTHON_BIN:-}" ]] && ! command -v uv >/dev/null 2>&1; then
+  echo "错误：未找到 uv，请先安装 https://docs.astral.sh/uv/" >&2
+  exit 1
+fi
 if ! command -v npm >/dev/null 2>&1; then
   echo "错误：未找到 npm，请先安装 Node.js" >&2
   exit 1
 fi
-
-cd "$ROOT/image_editor"
 
 PIDS=()
 
@@ -36,16 +35,14 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-echo "使用 Python: $PYTHON_BIN"
-
 # 后端（worker 必须 --processes 1 --threads 2，防止多进程各自加载模型导致 OOM）
-"$PYTHON_BIN" -m image_editor.main &
+PY python -m painterAgent.main &
 PIDS+=("$!")
 
-"$PYTHON_BIN" -m dramatiq image_editor.worker --processes 1 --threads 2 &
+PY python -m dramatiq painterAgent.worker --processes 1 --threads 2 &
 PIDS+=("$!")
 
-( cd "$ROOT/image_editor/frontend" && npm run dev ) &
+( cd "$ROOT/frontend" && npm run dev ) &
 PIDS+=("$!")
 
 echo "服务启动中："

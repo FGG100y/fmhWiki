@@ -3,20 +3,22 @@
 ## Setup & Run
 
 ```bash
-# 后端 (pyenv 虚拟环境 image-editor)
-cd image_editor
-python -m image_editor.main           # localhost:8000
+# 后端
+uv run python -m painterAgent.main           # localhost:8000
 
 # Worker（异步任务队列）
-python -m dramatiq image_editor.worker --processes 1 --threads 2
+uv run python -m dramatiq painterAgent.worker --processes 1 --threads 2
 
 # 前端
-cd image_editor/frontend
+cd frontend
 npm run dev                            # localhost:5173, API proxy → 8000
+
+# 或一键启动全部三个进程
+./start-dev.sh
 ```
 
-- Python 3.11+, pyenv 虚拟环境 `image-editor`
-- **不要运行** `pip install` / `uv sync` / `npm install` 除非用户明确要求
+- Python 3.11+，由 uv 管理（`.python-version` / `uv.lock`，包位于 `src/painterAgent/`）
+- **不要运行** `uv sync` / `uv add` / `npm install` 除非用户明确要求
 - 杀死所有 worker 后需显式指定 `--processes 1 --threads 2`，否则 dramatiq 默认 fork CPU 核数个进程，每份独立加载 Moebius 模型到 GPU 显存导致 OOM
 
 ## Env
@@ -34,13 +36,13 @@ npm run dev                            # localhost:5173, API proxy → 8000
 
 **Seedream 5.0 单模型 + 本地 Moebius 双模式** — 不再只有云服务。
 
-- `tools/router.py` 根据 `has_image` / `has_mask` 推断任务类型：`generate`（文生图）→ `edit`（图生图）→ `inpaint`（局部重绘）
+- `src/painterAgent/tools/router.py` 根据 `has_image` / `has_mask` 推断任务类型：`generate`（文生图）→ `edit`（图生图）→ `inpaint`（局部重绘）
 - 每个任务类型有候选工具列表，按 `priority` 降序选：
   - `inpaint` → `moebius_inpaint` (priority 10, 本地 GPU) > `doubao_inpaint` (0, 云)
   - `edit` → `doubao_edit` (云)
   - `generate` → `doubao_generate` (云)
 - 本地候选失败（OOM / 模型错误）自动 fallback 到云服务
-- **`tools/__init__.py` 必须不为空** — 其中的 `import` 触发 `registry.register()`。空文件 = 所有工具未注册
+- **`src/painterAgent/tools/__init__.py` 必须不为空** — 其中的 `import` 触发 `registry.register()`。空文件 = 所有工具未注册
 
 ## Storage & Workflow
 
@@ -58,7 +60,7 @@ npm run dev                            # localhost:5173, API proxy → 8000
 ## GPU / Worker
 
 - **worker 进程数必须控制**：dramatiq 默认 fork CPU 核数个进程。每份独立加载 Moebius 模型进 GPU 显存。生产环境用 `--processes 1 --threads 2`
-- `worker.py` 中 `_cleanup_gpu()` 在每次 workflow 结束后调用 `torch.cuda.synchronize()` + `gc.collect()` + `torch.cuda.empty_cache()`。但只能释放缓存，**不能卸载模型参数本身**
+- `src/painterAgent/worker.py` 中 `_cleanup_gpu()` 在每次 workflow 结束后调用 `torch.cuda.synchronize()` + `gc.collect()` + `torch.cuda.empty_cache()`。但只能释放缓存，**不能卸载模型参数本身**
 - Moebius OOM 可尝试降低 `MOEBIUS_RESOLUTION`（默认 512）
 
 ## Moebius Client Bugs (记过簿)
@@ -69,4 +71,4 @@ npm run dev                            # localhost:5173, API proxy → 8000
 ## Testing
 
 - 无自动化测试、无 lint、无 typecheck、无 CI
-- 功能验证见 `image_editor/TODOs.md` 中 4 条链路（文生图、图生图、版本分支、undo/redo）
+- 功能验证见 `TODOs.md` 中 4 条链路（文生图、图生图、版本分支、undo/redo）

@@ -8,6 +8,6 @@ logs/
 .idea/
 .env
 .env.local
-image_editor/frontend/node_modules/
-image_editor/frontend/dist/
+frontend/node_modules/
+frontend/dist/
 uploads/
