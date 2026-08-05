@@ -909,3 +909,44 @@ body {
   touch-action: none;
 }
 
+/* ── Sketch (白板) ─────────────────────────────────── */
+
+.sketch-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1 / 1;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.sketch-color-palette {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.sketch-color-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  outline: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.15s, border-color 0.15s;
+}
+
+.sketch-color-btn:hover {
+  transform: scale(1.15);
+}
+
+.sketch-color-btn.active {
+  border-color: var(--accent);
+  outline-color: var(--accent);
+  transform: scale(1.15);
+}
+

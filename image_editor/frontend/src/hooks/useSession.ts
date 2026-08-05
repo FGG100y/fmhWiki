@@ -30,6 +30,8 @@ export interface SessionState {
   maskImageUrl: string | null;
   maskFilename: string | null;
   maskDrawingMode: boolean;
+  sketchDrawingMode: boolean;
+  sketchFilename: string | null;
   currentJobId: string | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -53,6 +55,8 @@ export function useSession() {
     maskImageUrl: null,
     maskFilename: null,
     maskDrawingMode: false,
+    sketchDrawingMode: false,
+    sketchFilename: null,
     currentJobId: null,
     canUndo: false,
     canRedo: false,
@@ -185,6 +189,8 @@ export function useSession() {
                   maskImageId: null,
                   maskImageUrl: null,
                   maskFilename: null,
+                  sketchDrawingMode: false,
+                  sketchFilename: null,
                   currentJobId: null,
                 }));
                 await refresh(sid, true);
@@ -201,6 +207,8 @@ export function useSession() {
                 maskImageId: null,
                 maskImageUrl: null,
                 maskFilename: null,
+                sketchDrawingMode: false,
+                sketchFilename: null,
                 currentJobId: null,
               }));
               await refresh(sid);
@@ -217,6 +225,8 @@ export function useSession() {
             maskImageId: null,
             maskImageUrl: null,
             maskFilename: null,
+            sketchDrawingMode: false,
+            sketchFilename: null,
           }));
           await refresh(sid, true);
         }
@@ -237,6 +247,8 @@ export function useSession() {
       uploadedImageId: imageId,
       uploadedImageUrl: imageUrl,
       currentInputUrl: imageUrl,
+      sketchFilename: null,
+      sketchDrawingMode: false,
     }));
   }, []);
 
@@ -263,6 +275,7 @@ export function useSession() {
     setState((prev) => ({
       ...prev,
       maskDrawingMode: true,
+      sketchDrawingMode: false,
     }));
   }, []);
 
@@ -292,6 +305,47 @@ export function useSession() {
           ...prev,
           maskDrawingMode: false,
           error: err instanceof Error ? err.message : "Mask 上传失败",
+        }));
+      }
+    },
+    []
+  );
+
+  const startSketchDrawing = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      sketchDrawingMode: true,
+      maskDrawingMode: false,
+    }));
+  }, []);
+
+  const cancelSketchDrawing = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      sketchDrawingMode: false,
+    }));
+  }, []);
+
+  const handleSketchDrawingConfirm = useCallback(
+    async (blob: Blob) => {
+      const file = new File([blob], `sketch_${Date.now()}.png`, {
+        type: "image/png",
+      });
+      try {
+        const resp = await uploadImage(file);
+        setState((prev) => ({
+          ...prev,
+          uploadedImageId: resp.image_id,
+          uploadedImageUrl: resp.image_url,
+          currentInputUrl: resp.image_url,
+          sketchDrawingMode: false,
+          sketchFilename: "白板草稿",
+        }));
+      } catch (err) {
+        setState((prev) => ({
+          ...prev,
+          sketchDrawingMode: false,
+          error: err instanceof Error ? err.message : "白板草稿上传失败",
         }));
       }
     },
@@ -433,5 +487,5 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, startMaskDrawing, cancelMaskDrawing, handleMaskDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn };
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, startMaskDrawing, cancelMaskDrawing, handleMaskDrawingConfirm, startSketchDrawing, cancelSketchDrawing, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn };
 }

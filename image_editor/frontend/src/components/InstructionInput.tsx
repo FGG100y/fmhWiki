@@ -10,6 +10,9 @@ interface Props {
   onClearMask: () => void;
   maskDrawingMode: boolean;
   onStartMaskDrawing: () => void;
+  onStartSketchDrawing: () => void;
+  sketchDrawingMode: boolean;
+  sketchFilename: string | null;
   hasInputImage: boolean;
   currentJobId: string | null;
   onCancel: (jobId: string) => void;
@@ -24,6 +27,9 @@ export default function InstructionInput({
   onClearMask,
   maskDrawingMode,
   onStartMaskDrawing,
+  onStartSketchDrawing,
+  sketchDrawingMode,
+  sketchFilename,
   hasInputImage,
   currentJobId,
   onCancel,
@@ -101,15 +107,29 @@ export default function InstructionInput({
       <button
         className="btn-upload"
         onClick={() => fileRef.current?.click()}
-        disabled={loading || uploading}
+        disabled={loading || uploading || maskDrawingMode || sketchDrawingMode}
         title="选择图片作为修图起点"
       >
-        {uploading ? "上传中…" : uploadedFilename ? "已选图片" : "选择图片"}
+        {uploading
+          ? "上传中…"
+          : sketchFilename
+          ? "白板草稿"
+          : uploadedFilename
+          ? "已选图片"
+          : "选择图片"}
+      </button>
+      <button
+        className={`btn-upload btn-mask-draw ${sketchDrawingMode ? "btn-mask-active" : ""}`}
+        onClick={onStartSketchDrawing}
+        disabled={loading || uploading || maskDrawingMode || sketchDrawingMode}
+        title="在白板上自由绘制草图，发送给模型美化"
+      >
+        {sketchDrawingMode ? "绘制中…" : "白板"}
       </button>
       <button
         className={`btn-upload btn-mask ${maskFilename ? "btn-mask-active" : ""}`}
         onClick={() => maskRef.current?.click()}
-        disabled={loading || maskUploading || maskDrawingMode}
+        disabled={loading || maskUploading || maskDrawingMode || sketchDrawingMode}
         title="上传 Mask 图片（白色区域=编辑区域）"
       >
         {maskUploading
@@ -121,7 +141,7 @@ export default function InstructionInput({
       <button
         className={`btn-upload btn-mask-draw ${maskDrawingMode ? "btn-mask-active" : ""}`}
         onClick={onStartMaskDrawing}
-        disabled={loading || !hasInputImage}
+        disabled={loading || !hasInputImage || sketchDrawingMode}
         title="在图片上绘制 Mask（白色区域=编辑区域）"
       >
         {maskDrawingMode ? "绘制中…" : "绘制 Mask"}
@@ -140,7 +160,11 @@ export default function InstructionInput({
         className="input-field"
         type="text"
         placeholder={
-          uploadedFilename
+          sketchDrawingMode
+            ? "请在白板上绘制草图，完成后点击确认…"
+            : sketchFilename
+            ? "已绘制草稿，输入美化指令…"
+            : uploadedFilename
             ? `已选 ${uploadedFilename}，输入修图指令…`
             : maskFilename
             ? `已上传 Mask，输入局部编辑指令…`
@@ -151,7 +175,7 @@ export default function InstructionInput({
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
-        disabled={loading || maskDrawingMode}
+        disabled={loading || maskDrawingMode || sketchDrawingMode}
       />
       {loading && currentJobId ? (
         <button
@@ -165,7 +189,7 @@ export default function InstructionInput({
         <button
           className="btn-send"
           onClick={handleSubmit}
-          disabled={loading || maskDrawingMode || !value.trim()}
+          disabled={loading || maskDrawingMode || sketchDrawingMode || !value.trim()}
         >
           发送
         </button>

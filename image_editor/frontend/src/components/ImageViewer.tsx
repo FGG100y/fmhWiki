@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import MaskCanvas from "./MaskCanvas";
+import SketchCanvas from "./SketchCanvas";
 
 interface Props {
   inputUrl: string | null;
@@ -9,6 +10,9 @@ interface Props {
   maskDrawingMode: boolean;
   onMaskDrawingConfirm: (maskBlob: Blob) => void;
   onMaskDrawingCancel: () => void;
+  sketchDrawingMode: boolean;
+  onSketchDrawingConfirm: (blob: Blob) => void;
+  onSketchDrawingCancel: () => void;
 }
 
 async function fetchAsBlob(url: string): Promise<Blob> {
@@ -101,6 +105,9 @@ export default function ImageViewer({
   maskDrawingMode,
   onMaskDrawingConfirm,
   onMaskDrawingCancel,
+  sketchDrawingMode,
+  onSketchDrawingConfirm,
+  onSketchDrawingCancel,
 }: Props) {
   const [zoomUrl, setZoomUrl] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -222,16 +229,21 @@ export default function ImageViewer({
           <div className="image-label">
             输入图片
             {maskDrawingMode && <span className="mask-drawing-badge">绘制 Mask 中</span>}
+            {sketchDrawingMode && <span className="mask-drawing-badge">白板绘制中</span>}
           </div>
           <div className="image-container">
-            {(inputUrl || outputUrl) ? (
-              maskDrawingMode ? (
-                <MaskCanvas
-                  imageUrl={inputUrl || outputUrl || ""}
-                  onConfirm={onMaskDrawingConfirm}
-                  onCancel={onMaskDrawingCancel}
-                />
-              ) : (
+            {maskDrawingMode ? (
+              <MaskCanvas
+                imageUrl={inputUrl || outputUrl || ""}
+                onConfirm={onMaskDrawingConfirm}
+                onCancel={onMaskDrawingCancel}
+              />
+            ) : sketchDrawingMode ? (
+              <SketchCanvas
+                onConfirm={onSketchDrawingConfirm}
+                onCancel={onSketchDrawingCancel}
+              />
+            ) : (inputUrl || outputUrl) ? (
                 <img
                   src={inputUrl || ""}
                   alt="输入图片"
@@ -240,7 +252,7 @@ export default function ImageViewer({
                   title="点击放大"
                 />
               )
-            ) : (
+            : (
               <div className="image-placeholder">
                 {loading ? "生成中…" : "首轮将从文字生成图片"}
               </div>

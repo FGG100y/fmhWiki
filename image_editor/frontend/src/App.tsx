@@ -35,6 +35,11 @@ export default function App() {
     startMaskDrawing,
     cancelMaskDrawing,
     handleMaskDrawingConfirm,
+    sketchDrawingMode,
+    startSketchDrawing,
+    cancelSketchDrawing,
+    handleSketchDrawingConfirm,
+    sketchFilename,
     undo,
     redo,
     canUndo,
@@ -93,6 +98,9 @@ export default function App() {
             maskDrawingMode={maskDrawingMode}
             onMaskDrawingConfirm={handleMaskDrawingConfirm}
             onMaskDrawingCancel={cancelMaskDrawing}
+            sketchDrawingMode={sketchDrawingMode}
+            onSketchDrawingConfirm={handleSketchDrawingConfirm}
+            onSketchDrawingCancel={cancelSketchDrawing}
           />
           <InstructionInput
             onSubmit={sendInstruction}
@@ -103,6 +111,9 @@ export default function App() {
             onClearMask={clearMask}
             maskDrawingMode={maskDrawingMode}
             onStartMaskDrawing={startMaskDrawing}
+            onStartSketchDrawing={startSketchDrawing}
+            sketchDrawingMode={sketchDrawingMode}
+            sketchFilename={sketchFilename}
             hasInputImage={!!currentInputUrl}
             currentJobId={currentJobId}
             onCancel={cancelExecution}
