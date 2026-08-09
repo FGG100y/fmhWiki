@@ -41,7 +41,6 @@ class MemoryStore:
             "project_id": project_id,
             "user_id": user_id,
             "current_turn_id": None,
-            "redo_stack": [],
             "created_at": now,
             "updated_at": now,
         }
@@ -54,36 +53,8 @@ class MemoryStore:
         if turn_id is not None and turn_id not in self._turns:
             raise ValueError("turn not found")
         session["current_turn_id"] = turn_id
-        session["redo_stack"] = []
         session["updated_at"] = datetime.utcnow().isoformat()
         return session
-
-    def undo(self, session_id: str) -> Optional[str]:
-        session = self._sessions.get(session_id)
-        if not session:
-            return None
-        current = session.get("current_turn_id")
-        if not current:
-            return None
-        current_turn = self._turns.get(current)
-        parent = current_turn.parent_turn_id if current_turn else None
-        if current:
-            session["redo_stack"].append(current)
-        session["current_turn_id"] = parent
-        session["updated_at"] = datetime.utcnow().isoformat()
-        return parent
-
-    def redo(self, session_id: str) -> Optional[str]:
-        session = self._sessions.get(session_id)
-        if not session:
-            return None
-        redo_stack = session.get("redo_stack", [])
-        if not redo_stack:
-            return session.get("current_turn_id")
-        new_current = redo_stack.pop()
-        session["current_turn_id"] = new_current
-        session["updated_at"] = datetime.utcnow().isoformat()
-        return new_current
 
     def get_session(self, session_id: str) -> Optional[dict]:
         return self._sessions.get(session_id)
@@ -102,13 +73,10 @@ class MemoryStore:
             if t.session_id == session_id
         ]
         turns.sort(key=lambda t: t.created_at)
-        current_turn = self._turns.get(session["current_turn_id"] or "")
         return SessionResponse(
             session_id=session["session_id"],
             project_id=session["project_id"],
             current_turn_id=session["current_turn_id"],
-            can_undo=bool(current_turn and current_turn.parent_turn_id),
-            can_redo=bool(session.get("redo_stack")),
             turns=turns,
             created_at=session["created_at"],
             updated_at=session["updated_at"],
@@ -170,9 +138,6 @@ class MemoryStore:
         if session:
             if session.get("current_turn_id") == turn_id:
                 session["current_turn_id"] = turn.parent_turn_id
-            redo_stack = session.get("redo_stack") or []
-            if turn_id in redo_stack:
-                redo_stack.remove(turn_id)
             session["updated_at"] = datetime.utcnow().isoformat()
         del self._turns[turn_id]
         return True
@@ -231,12 +196,6 @@ class MemoryStore:
         if turn_id:
             rows = [r for r in rows if r.turn_id == turn_id]
         return rows
-
-    def clear_redo_stack(self, session_id: str) -> None:
-        session = self._sessions.get(session_id)
-        if session:
-            session["redo_stack"] = []
-            session["updated_at"] = datetime.utcnow().isoformat()
 
     # ---- Helpers ----
 
@@ -304,8 +263,8 @@ class PostgresStore:
         session_id = f"session_{uuid.uuid4().hex[:12]}"
         now = datetime.utcnow().isoformat()
         query = """
-            INSERT INTO sessions (session_id, project_id, user_id, current_turn_id, redo_stack, created_at, updated_at)
-            VALUES (%s, %s, %s, NULL, '[]', %s, %s)
+            INSERT INTO sessions (session_id, project_id, user_id, current_turn_id, created_at, updated_at)
+            VALUES (%s, %s, %s, NULL, %s, %s)
             RETURNING *
         """
         result = self._execute(query, (session_id, project_id, user_id, now, now), fetch=True)
@@ -324,61 +283,14 @@ class PostgresStore:
                 raise ValueError("turn not found")
         now = datetime.utcnow().isoformat()
         update_query = """
-            UPDATE sessions 
-            SET current_turn_id = %s, redo_stack = '[]', updated_at = %s
+            UPDATE sessions
+            SET current_turn_id = %s, updated_at = %s
             WHERE session_id = %s
             RETURNING *
         """
         result = self._execute(update_query, (turn_id, now, session_id), fetch=True)
         self._commit()
         return dict(result[0]) if result else {}
-
-    def undo(self, session_id: str) -> Optional[str]:
-        query = "SELECT * FROM sessions WHERE session_id = %s"
-        result = self._execute(query, (session_id,), fetch=True)
-        if not result:
-            return None
-        session = dict(result[0])
-        current = session.get("current_turn_id")
-        if not current:
-            return None
-        turn_query = "SELECT * FROM turns WHERE turn_id = %s"
-        turn_result = self._execute(turn_query, (current,), fetch=True)
-        parent = dict(turn_result[0]).get("parent_turn_id") if turn_result else None
-        redo_stack = session.get("redo_stack") or []
-        if current:
-            redo_stack.append(current)
-        now = datetime.utcnow().isoformat()
-        update_query = """
-            UPDATE sessions 
-            SET current_turn_id = %s, redo_stack = %s, updated_at = %s
-            WHERE session_id = %s
-            RETURNING *
-        """
-        self._execute(update_query, (parent, json.dumps(redo_stack), now, session_id))
-        self._commit()
-        return parent
-
-    def redo(self, session_id: str) -> Optional[str]:
-        query = "SELECT * FROM sessions WHERE session_id = %s"
-        result = self._execute(query, (session_id,), fetch=True)
-        if not result:
-            return None
-        session = dict(result[0])
-        redo_stack = session.get("redo_stack") or []
-        if not redo_stack:
-            return session.get("current_turn_id")
-        new_current = redo_stack.pop()
-        now = datetime.utcnow().isoformat()
-        update_query = """
-            UPDATE sessions 
-            SET current_turn_id = %s, redo_stack = %s, updated_at = %s
-            WHERE session_id = %s
-            RETURNING *
-        """
-        self._execute(update_query, (new_current, json.dumps(redo_stack), now, session_id))
-        self._commit()
-        return new_current
 
     def get_session(self, session_id: str) -> Optional[dict]:
         query = "SELECT * FROM sessions WHERE session_id = %s"
@@ -398,18 +310,10 @@ class PostgresStore:
         query = "SELECT * FROM turns WHERE session_id = %s ORDER BY created_at"
         turns_result = self._execute(query, (session_id,), fetch=True)
         turns = [self._to_turn_detail(dict(t)) for t in turns_result] if turns_result else []
-        current_turn_id = session.get("current_turn_id")
-        current_turn = None
-        if current_turn_id:
-            turn_query = "SELECT * FROM turns WHERE turn_id = %s"
-            turn_result = self._execute(turn_query, (current_turn_id,), fetch=True)
-            current_turn = dict(turn_result[0]) if turn_result else None
         return SessionResponse(
             session_id=session["session_id"],
             project_id=session["project_id"],
-            current_turn_id=session["current_turn_id"],
-            can_undo=bool(current_turn and current_turn.get("parent_turn_id")),
-            can_redo=bool(session.get("redo_stack")),
+            current_turn_id=session.get("current_turn_id"),
             turns=turns,
             created_at=session["created_at"].isoformat() if isinstance(session["created_at"], datetime) else session["created_at"],
             updated_at=session["updated_at"].isoformat() if isinstance(session["updated_at"], datetime) else session["updated_at"],
@@ -583,12 +487,6 @@ class PostgresStore:
         query += " ORDER BY created_at"
         result = self._execute(query, params, fetch=True)
         return [ModelCallRecord(**dict(r)) for r in result] if result else []
-
-    def clear_redo_stack(self, session_id: str) -> None:
-        now = datetime.utcnow().isoformat()
-        query = "UPDATE sessions SET redo_stack = '[]', updated_at = %s WHERE session_id = %s"
-        self._execute(query, (now, session_id))
-        self._commit()
 
     # ---- Helpers ----
 

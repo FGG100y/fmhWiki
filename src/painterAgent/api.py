@@ -92,23 +92,6 @@ async def get_turn(turn_id: str) -> TurnDetailResponse:
 # ---- Undo / Redo ----
 
 
-@app.post("/sessions/{session_id}/undo")
-async def undo_turn(session_id: str) -> dict:
-    session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="session not found")
-    parent_id = store.undo(session_id)
-    return {"current_turn_id": parent_id}
-
-
-@app.post("/sessions/{session_id}/redo")
-async def redo_turn(session_id: str) -> dict:
-    session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="session not found")
-    return {"current_turn_id": store.redo(session_id)}
-
-
 @app.post("/sessions/{session_id}/switch-current-turn")
 async def switch_current_turn(session_id: str, req: SwitchTurnRequest) -> dict:
     session = store.get_session(session_id)

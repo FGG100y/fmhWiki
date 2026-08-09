@@ -3,8 +3,6 @@ import {
   createSession,
   executeTurn,
   getSession,
-  undoTurn as apiUndo,
-  redoTurn as apiRedo,
   replayTurn as apiReplay,
   getJob,
   cancelJob,
@@ -31,8 +29,6 @@ export interface SessionState {
   maskFilename: string | null;
   sketchFilename: string | null;
   currentJobId: string | null;
-  canUndo: boolean;
-  canRedo: boolean;
   hasPreviousSession: boolean;
   executionMode: "auto" | "agentic" | "deterministic";
 }
@@ -58,8 +54,6 @@ export function useSession() {
     maskFilename: null,
     sketchFilename: null,
     currentJobId: null,
-    canUndo: false,
-    canRedo: false,
     hasPreviousSession: false,
     executionMode: "auto",
   });
@@ -112,8 +106,6 @@ export function useSession() {
         currentOutputUrl,
         currentInputUrl,
         currentInstruction: currentTurn?.user_instruction ?? null,
-        canUndo: data.can_undo,
-        canRedo: data.can_redo,
       }));
     } catch (e: unknown) {
       setState((prev) => ({
@@ -335,34 +327,6 @@ export function useSession() {
     []
   );
 
-  const undo = useCallback(async () => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    try {
-      await apiUndo(sid);
-      await refresh(sid);
-    } catch (e: unknown) {
-      setState((prev) => ({
-        ...prev,
-        error: e instanceof Error ? e.message : "Undo failed",
-      }));
-    }
-  }, [refresh]);
-
-  const redo = useCallback(async () => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    try {
-      await apiRedo(sid);
-      await refresh(sid);
-    } catch (e: unknown) {
-      setState((prev) => ({
-        ...prev,
-        error: e instanceof Error ? e.message : "Redo failed",
-      }));
-    }
-  }, [refresh]);
-
   const retry = useCallback(
     async (turnId: string): Promise<ExecuteResult | undefined> => {
       const sid = sessionIdRef.current;
@@ -474,5 +438,5 @@ export function useSession() {
     setState((prev) => ({ ...prev, executionMode: mode }));
   }, []);
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession, dismissPreviousSession, setExecutionMode };
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, retry, cancelExecution, deleteTurn, resumeSession, dismissPreviousSession, setExecutionMode };
 }

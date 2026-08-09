@@ -12,6 +12,7 @@ interface Props {
   loading: boolean;
   executionMode: ExecutionMode;
   onModeChange: (mode: ExecutionMode) => void;
+  guideStep: number;
   onUploadImage: (imageId: string, imageUrl: string, filename: string) => void;
   onStartWhiteboard: () => void;
   onUploadMask: (imageId: string, imageUrl: string) => void;
@@ -33,6 +34,7 @@ export default function ActivityBar({
   loading,
   executionMode,
   onModeChange,
+  guideStep,
   onUploadImage,
   onStartWhiteboard,
   onUploadMask,
@@ -95,65 +97,69 @@ export default function ActivityBar({
       />
 
       {/* Upload Image */}
-      <button
-        className={`activity-bar-btn ${uploading ? "uploading" : ""}`}
-        onClick={() => fileRef.current?.click()}
-        disabled={isDisabled || uploading}
-        title="上传图片"
-      >
-        <span className="activity-bar-icon">📷</span>
-        <span className="activity-bar-label">图片</span>
-      </button>
+      <div className={`activity-bar-upload-group ${guideStep === 2 ? "guide-highlight" : ""}`}>
+        <button
+          className={`activity-bar-btn ${uploading ? "uploading" : ""}`}
+          onClick={() => fileRef.current?.click()}
+          disabled={isDisabled || uploading}
+          title="上传图片"
+        >
+          <span className="activity-bar-icon">📷</span>
+          <span className="activity-bar-label">图片</span>
+        </button>
 
-      {/* Whiteboard */}
-      <button
-        className={`activity-bar-btn ${activeTool === "whiteboard" ? "active" : ""} ${sketchFilename ? "has-content" : ""}`}
-        onClick={onStartWhiteboard}
-        disabled={isDisabled || uploading}
-        title="白板绘制草图"
-      >
-        <span className="activity-bar-icon">✏️</span>
-        <span className="activity-bar-label">白板</span>
-        {sketchFilename && <span className="activity-bar-dot" />}
-      </button>
+        {/* Whiteboard */}
+        <button
+          className={`activity-bar-btn ${activeTool === "whiteboard" ? "active" : ""} ${sketchFilename ? "has-content" : ""}`}
+          onClick={onStartWhiteboard}
+          disabled={isDisabled || uploading}
+          title="白板绘制草图"
+        >
+          <span className="activity-bar-icon">✏️</span>
+          <span className="activity-bar-label">白板</span>
+          {sketchFilename && <span className="activity-bar-dot" />}
+        </button>
+      </div>
 
-      {/* Upload Mask */}
-      <button
-        className={`activity-bar-btn ${maskFilename ? "has-content" : ""}`}
-        onClick={() => maskRef.current?.click()}
-        disabled={isDisabled || maskUploading}
-        title={maskFilename ? `Mask: ${maskFilename}（点击更换，悬停清除）` : "上传 Mask 图片"}
-      >
-        <span className="activity-bar-icon">🎭</span>
-        <span className="activity-bar-label">Mask</span>
-        {maskFilename && (
-          <span
-            className="activity-bar-dot activity-bar-dot-clear"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClearMask();
-            }}
-            title="清除 Mask"
-          />
-        )}
-      </button>
+      <div className={`activity-bar-mask-group ${guideStep === 3 ? "guide-highlight" : ""}`}>
+        {/* Upload Mask */}
+        <button
+          className={`activity-bar-btn ${maskFilename ? "has-content" : ""}`}
+          onClick={() => maskRef.current?.click()}
+          disabled={isDisabled || maskUploading}
+          title={maskFilename ? `Mask: ${maskFilename}（点击更换，悬停清除）` : "上传 Mask 图片"}
+        >
+          <span className="activity-bar-icon">🎭</span>
+          <span className="activity-bar-label">Mask</span>
+          {maskFilename && (
+            <span
+              className="activity-bar-dot activity-bar-dot-clear"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClearMask();
+              }}
+              title="清除 Mask"
+            />
+          )}
+        </button>
 
-      {/* Draw Mask */}
-      <button
-        className={`activity-bar-btn ${activeTool === "mask-draw" ? "active" : ""}`}
-        onClick={onStartMaskDraw}
-        disabled={isDisabled || !hasReferenceImage || maskUploading}
-        title={hasReferenceImage ? "在图片上绘制 Mask" : "需要先上传参考图才能绘制 Mask"}
-      >
-        <span className="activity-bar-icon">🖌️</span>
-        <span className="activity-bar-label">绘制</span>
-      </button>
+        {/* Draw Mask */}
+        <button
+          className={`activity-bar-btn ${activeTool === "mask-draw" ? "active" : ""}`}
+          onClick={onStartMaskDraw}
+          disabled={isDisabled || !hasReferenceImage || maskUploading}
+          title={hasReferenceImage ? "在图片上绘制 Mask" : "需要先上传参考图才能绘制 Mask"}
+        >
+          <span className="activity-bar-icon">🖌️</span>
+          <span className="activity-bar-label">绘制</span>
+        </button>
+      </div>
 
       {/* Separator */}
       <div className="activity-bar-sep" />
 
       {/* Execution Mode */}
-      <div className="activity-bar-mode">
+      <div className={`activity-bar-mode ${guideStep === 1 ? "guide-highlight" : ""}`}>
         {MODES.map((m) => (
           <button
             key={m.key}

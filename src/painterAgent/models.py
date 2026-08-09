@@ -18,8 +18,6 @@ class Intent(str, Enum):
     text_edit = "text_edit"
     variation = "variation"
     upscale = "upscale"
-    undo = "undo"
-    redo = "redo"
     compare = "compare"
     export = "export"
 
@@ -211,8 +209,6 @@ class SessionResponse(BaseModel):
     session_id: str
     project_id: str
     current_turn_id: Optional[str] = None
-    can_undo: bool = False
-    can_redo: bool = False
     turns: list[TurnDetailResponse] = Field(default_factory=list)
     created_at: str
     updated_at: str

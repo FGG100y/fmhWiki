@@ -29,6 +29,7 @@ export default function App() {
   const [chatRatio, setChatRatio] = useState(loadSplitRatio);
   const [activeTool, setActiveTool] = useState<ActiveTool>(null);
   const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
+  const [guideStep, setGuideStep] = useState(-1);
 
   const splitRef = useRef<HTMLDivElement>(null);
   const resizingRef = useRef(false);
@@ -223,6 +224,7 @@ export default function App() {
           loading={loading}
           executionMode={executionMode}
           onModeChange={setExecutionMode}
+          guideStep={guideStep}
           onUploadImage={onUploadImage}
           onStartWhiteboard={onStartWhiteboard}
           onUploadMask={onUploadMask}
@@ -249,6 +251,7 @@ export default function App() {
               maskFilename={maskFilename}
               sketchFilename={sketchFilename}
               currentJobId={currentJobId}
+              guideStep={guideStep}
               onSubmit={handleSend}
               onCancel={cancelExecution}
             />
@@ -285,9 +288,10 @@ export default function App() {
           onDelete={deleteTurn}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setManualCollapsed((v) => !v)}
+          guideStep={guideStep}
         />
       </div>
-      <WelcomeGuide open={guideOpen} onClose={closeGuide} />
+      <WelcomeGuide open={guideOpen} onClose={closeGuide} onStepChange={setGuideStep} />
     </div>
   );
 }

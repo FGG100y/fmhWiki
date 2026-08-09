@@ -8,6 +8,7 @@ interface Props {
   maskFilename: string | null;
   sketchFilename: string | null;
   currentJobId: string | null;
+  guideStep: number;
   onSubmit: (instruction: string) => void;
   onCancel: (jobId: string) => void;
 }
@@ -43,6 +44,7 @@ export default function ChatInput({
   maskFilename,
   sketchFilename,
   currentJobId,
+  guideStep,
   onSubmit,
   onCancel,
 }: Props) {
@@ -71,7 +73,7 @@ export default function ChatInput({
   );
 
   return (
-    <div className="chat-input">
+    <div className={`chat-input ${guideStep === 2 ? "guide-highlight" : ""}`}>
       <input
         className="input-field"
         type="text"

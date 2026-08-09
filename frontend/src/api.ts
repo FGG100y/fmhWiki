@@ -50,8 +50,6 @@ export interface SessionResponse {
   session_id: string;
   project_id: string;
   current_turn_id: string | null;
-  can_undo: boolean;
-  can_redo: boolean;
   turns: TurnDetail[];
   created_at: string;
   updated_at: string;
@@ -145,14 +143,6 @@ export function getSession(sessionId: string): Promise<SessionResponse> {
 
 export function getTurn(turnId: string): Promise<TurnDetail> {
   return request<TurnDetail>(`/turns/${encodeURIComponent(turnId)}`);
-}
-
-export function undoTurn(sessionId: string): Promise<{ current_turn_id: string | null }> {
-  return request(`/sessions/${encodeURIComponent(sessionId)}/undo`, { method: "POST" });
-}
-
-export function redoTurn(sessionId: string): Promise<{ current_turn_id: string | null }> {
-  return request(`/sessions/${encodeURIComponent(sessionId)}/redo`, { method: "POST" });
 }
 
 export function replayTurn(

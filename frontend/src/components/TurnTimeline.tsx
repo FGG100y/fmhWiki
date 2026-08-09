@@ -9,6 +9,7 @@ interface Props {
   onDelete: (turnId: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  guideStep: number;
 }
 
 interface FlatNode {
@@ -65,7 +66,7 @@ function BranchLines({ depth, isLast }: { depth: number; isLast: boolean }) {
   );
 }
 
-export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, onDelete, collapsed, onToggleCollapse }: Props) {
+export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, onDelete, collapsed, onToggleCollapse, guideStep }: Props) {
   const { nodes: flatNodes, rootIds } = useMemo(() => buildTree(turns), [turns]);
 
   const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(() => {
@@ -100,9 +101,11 @@ export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, 
     [flatNodes, collapsedRoots]
   );
 
+  const highlight = guideStep === 4 ? "guide-highlight" : "";
+
   if (collapsed) {
     return (
-      <aside className="timeline timeline-collapsed">
+      <aside className={`timeline timeline-collapsed ${highlight}`}>
         <button
           className="timeline-expand-btn"
           onClick={onToggleCollapse}
@@ -116,7 +119,7 @@ export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, 
 
   if (turns.length === 0) {
     return (
-      <aside className="timeline">
+      <aside className={`timeline ${highlight}`}>
         <div className="timeline-header">
           <h3>编辑历史</h3>
           <button
@@ -133,7 +136,7 @@ export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, 
   }
 
   return (
-    <aside className="timeline">
+    <aside className={`timeline ${highlight}`}>
       <div className="timeline-header">
         <h3>编辑历史</h3>
         <button
