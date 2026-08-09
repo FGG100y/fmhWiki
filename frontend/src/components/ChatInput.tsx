@@ -1,6 +1,5 @@
 import { useState } from "react";
 import type { ActiveTool } from "./ActivityBar";
-import type { ExecutionMode } from "../hooks/useSession";
 
 interface Props {
   loading: boolean;
@@ -9,23 +8,9 @@ interface Props {
   maskFilename: string | null;
   sketchFilename: string | null;
   currentJobId: string | null;
-  executionMode: ExecutionMode;
-  onModeChange: (mode: ExecutionMode) => void;
   onSubmit: (instruction: string) => void;
   onCancel: (jobId: string) => void;
 }
-
-const MODE_LABELS: Record<ExecutionMode, string> = {
-  deterministic: "确定性",
-  auto: "自动",
-  agentic: "Agentic",
-};
-
-const MODE_HINTS: Record<ExecutionMode, string> = {
-  deterministic: "每次执行单个编辑，适合示范操作",
-  auto: "系统自动选择（默认）",
-  agentic: "模型自主拆解多步编辑",
-};
 
 function getPlaceholder(
   activeTool: ActiveTool,
@@ -58,8 +43,6 @@ export default function ChatInput({
   maskFilename,
   sketchFilename,
   currentJobId,
-  executionMode,
-  onModeChange,
   onSubmit,
   onCancel,
 }: Props) {
@@ -80,12 +63,6 @@ export default function ChatInput({
     }
   };
 
-  const cycleMode = () => {
-    const modes: ExecutionMode[] = ["deterministic", "auto", "agentic"];
-    const idx = modes.indexOf(executionMode);
-    onModeChange(modes[(idx + 1) % modes.length]);
-  };
-
   const placeholder = getPlaceholder(
     activeTool,
     uploadedFilename,
@@ -95,15 +72,6 @@ export default function ChatInput({
 
   return (
     <div className="chat-input">
-      <button
-        className="mode-switch"
-        onClick={cycleMode}
-        disabled={loading}
-        title={MODE_HINTS[executionMode]}
-        type="button"
-      >
-        {MODE_LABELS[executionMode]}
-      </button>
       <input
         className="input-field"
         type="text"

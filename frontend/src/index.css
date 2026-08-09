@@ -1227,30 +1227,51 @@ body {
   flex-shrink: 0;
 }
 
-.mode-switch {
+/* ── ActivityBar: separator & execution-mode segmented control ────── */
+
+.activity-bar-sep {
+  width: 28px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
   flex-shrink: 0;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-panel);
-  color: var(--text-secondary);
-  font-size: 12px;
+}
+
+.activity-bar-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 2px;
+}
+
+.mode-seg-btn {
+  width: 40px;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 9px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
-  white-space: nowrap;
-  min-width: 56px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
   text-align: center;
+  line-height: 1.2;
 }
 
-.mode-switch:hover:not(:disabled) {
-  background: var(--accent);
-  color: #fff;
+.mode-seg-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.mode-seg-btn.active {
   border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
-.mode-switch:disabled {
-  opacity: 0.5;
+.mode-seg-btn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 

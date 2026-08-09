@@ -221,6 +221,8 @@ export default function App() {
           maskFilename={maskFilename}
           sketchFilename={sketchFilename}
           loading={loading}
+          executionMode={executionMode}
+          onModeChange={setExecutionMode}
           onUploadImage={onUploadImage}
           onStartWhiteboard={onStartWhiteboard}
           onUploadMask={onUploadMask}
@@ -247,8 +249,6 @@ export default function App() {
               maskFilename={maskFilename}
               sketchFilename={sketchFilename}
               currentJobId={currentJobId}
-              executionMode={executionMode}
-              onModeChange={setExecutionMode}
               onSubmit={handleSend}
               onCancel={cancelExecution}
             />
