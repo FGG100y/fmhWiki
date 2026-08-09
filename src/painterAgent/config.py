@@ -117,6 +117,9 @@ class OllamaConfig:
     model: str = field(
         default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen3:8b")
     )
+    think: bool = field(
+        default_factory=lambda: os.getenv("OLLAMA_THINK", "false").lower() == "true"
+    )
 
 
 @dataclass

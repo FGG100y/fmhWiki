@@ -66,7 +66,7 @@
 
 | 决策点 | 所在节点 | 记录内容 |
 |--------|---------|---------|
-| 路由选择 | `route_after_safety` + `run_image_tool` | 候选工具列表、优先级、最终选择、每次尝试结果 |
+| 路由选择 | `route_after_safety`（路由函数）+ `run_image_tool`（执行节点） | 候选工具列表、优先级、最终选择、每次尝试结果 |
 | Prompt 增强 | `enhance_prompt` | 使用的 LLM provider、是否 fallback |
 | QA 判定 | `visual_qa` | 评分、是否通过、重试建议 |
 
@@ -110,7 +110,7 @@
 
 > **定义**：一个 0-N 的整数，量化本次执行偏离最优路径的程度。0 表示无降级（首选工具一次成功），值越高表示越多 fallback/重试。
 
-**计算规则**：每次 fallback +1，每次 QA 重试 +1，QA 不通过额外 +2。这是一个派生指标，不直接存储而是从 `tool_attempts` 和 `qa_result` 计算得出。
+**计算规则**：每次工具尝试失败 +1，每次 QA 重试 +1，QA 不通过额外 +2。这是一个派生指标，不直接存储而是从 `tool_attempts` 和 `qa_result` 计算得出。`fallback_occurred` 可从 `tool_attempts` 派生（存在失败尝试即为 True），不重复计入降级分。
 
 **用途**：运维人员可以通过 `degradation_score > 0` 快速过滤出「不够顺利」的执行，前端可以在 turn 详情中展示降级警告。
 
@@ -125,37 +125,35 @@
 ```mermaid
 sequenceDiagram
     participant W as run_workflow
-    participant RS as route_after_safety
-    participant RT as run_image_tool
     participant EP as enhance_prompt
+    participant RT as run_image_tool
     participant VQ as visual_qa
     participant PT as persist_turn
     participant DB as PostgreSQL
 
-    W->>W: 初始化 TurnTrace(session_id, turn_id)
+    W->>W: 初始化 TurnTrace(session_id, turn_id, execution_mode)
     Note over W: state["turn_trace"] = TurnTrace()
 
-    W->>RS: 进入路由决策
-    RS->>RS: 设置 trace.route_candidates, trace.execution_mode
-    Note over RS: 不创建 Attempt，此时尚未执行
-
     alt agentic 路径
-        RS->>W: agentic_edit 节点
-        W->>PT: 直接 persist
+        W->>PT: agentic_edit → 直接 persist（trace 仅含初始化字段）
     else deterministic / auto
-        RS->>EP: enhance_prompt
-        EP->>EP: 填充 trace.prompt_enhance
+        W->>EP: enhance_prompt
+        EP->>EP: 填充 trace.prompt_enhance_provider, latency, fallback
         EP->>RT: run_image_tool
+        RT->>RT: 调用 select_tool(all_candidates=True) 获取候选列表
+        RT->>RT: 设置 trace.route_candidates, trace.task_type
         RT->>RT: 对每个候选工具创建 ToolAttempt 并 append
         Note over RT: 首次成功则 trace.route_selected = tool_name
-        Note over RT: 需要 fallback 则 trace.fallback_occurred = true
+        Note over RT: 失败则记录 error，继续下一个候选
         RT->>VQ: visual_qa
-        VQ->>VQ: 填充 trace.qa_result
+        VQ->>VQ: 填充 trace.qa_score, qa_passed, qa_retry_count
         VQ->>PT: persist_turn
     end
 
-    PT->>DB: UPDATE turns SET trace = trace.json() WHERE turn_id = $1
+    PT->>DB: UPDATE turns SET trace = trace_to_dict(trace) WHERE turn_id = $1
 ```
+
+> **注意**：`route_after_safety` 是纯路由函数（返回 `Literal` 字符串选择下一个节点），不修改 state。trace 的 `route_candidates` 和 `task_type` 由 `run_image_tool` 在调用 `select_tool()` 后设置。
 
 ### 2.4 状态变迁
 
@@ -164,17 +162,19 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> Created: run_workflow 初始化
-    Created --> RoutingDecided: route_after_safety 设置候选列表
-    RoutingDecided --> PromptEnhanced: enhance_prompt 完成
-    RoutingDecided --> ToolExecuted: 跳过增强(本地inpaint)
+    Created --> PromptEnhanced: enhance_prompt 完成(deterministic路径)
+    Created --> ToolExecuted: 跳过增强(本地inpaint / agentic路径)
     PromptEnhanced --> ToolExecuted: run_image_tool 完成
+    note right of ToolExecuted: route_candidates, task_type, tool_attempts 已填充
     ToolExecuted --> QACompleted: visual_qa 完成
+    ToolExecuted --> Failed: 所有工具失败(异常)
     QACompleted --> Persisted: persist_turn 写入DB
-    ToolExecuted --> Persisted: 跳过QA(agentic路径)
+    Failed --> Persisted: persist_turn 写入DB(含失败trace)
     Persisted --> [*]
 
     note right of Created: execution_mode 已设置
     note right of ToolExecuted: tool_attempts 至少1个元素
+    note right of Failed: route_selected 为 None
 ```
 
 ### 2.5 与现有模块的关系
@@ -182,10 +182,12 @@ stateDiagram-v2
 | 现有模块 | 交互方式 |
 |---------|---------|
 | `state.py` / `ImageEditState` | 新增 `turn_trace` 可选字段 |
-| `workflow.py` 各节点 | 各节点读取/写入 trace 的对应子字段 |
-| `storage.py` / `PostgresStore` | `update_turn` 自动处理 `trace` 字段 JSON 序列化 |
-| `models.py` / `TurnDetailResponse` | 新增 `trace` 字段，前端可直接消费 |
+| `workflow.py` 各节点 | 各节点读取/写入 trace 的对应子字段；`fail` 节点增加 trace 持久化逻辑 |
+| `storage.py` / `PostgresStore` | `update_turn` 自动处理 `trace` 字段 JSON 序列化；`_to_turn_detail` 需映射 trace 字段 |
+| `models.py` / `TurnRecord` | 新增 `trace: dict` 字段 |
+| `models.py` / `TurnDetailResponse` | 新增 `trace: dict` 字段，前端可直接消费 |
 | `api.py` | 无需改动，`get_turn` 返回的 `TurnDetailResponse` 已包含 trace |
+| `trace.py`（新模块） | 定义 `TurnTrace`、`ToolAttempt`、`trace_to_dict()`、`trace_from_dict()` |
 
 封装策略：**薄封装**。trace 通过已有的 `TurnDetailResponse` 直接暴露给前端，不做额外转换。各 workflow 节点通过 state 字典读写 trace，不引入新的抽象层。
 
@@ -235,8 +237,6 @@ class TurnTrace:
     def degradation_score(self) -> int:
         """降级分：0=完美路径，越高越差"""
         score = 0
-        if self.fallback_occurred:
-            score += 1
         score += sum(1 for a in self.tool_attempts if not a.success)
         if self.qa_retry_count > 0:
             score += self.qa_retry_count
@@ -294,7 +294,7 @@ classDiagram
         +qa_score: float
         +qa_passed: bool
         +agent_steps: list~AgentStep~
-        +trace_json: JSONB
+        +trace: dict
     }
 
     TurnTrace "1" *-- "0..*" ToolAttempt : 包含
@@ -332,10 +332,18 @@ async def run_image_tool(state: ImageEditState) -> dict:
         trace = TurnTrace(
             turn_id=state["turn_id"],
             session_id=state["session_id"],
-            task_type=task_type,
-            execution_mode=state.get("execution_mode"),
-            route_candidates=tool_names,
         )
+
+    task_type = resolve_task_type(...)
+    enabled = config.enabled_providers()
+    tool_names = select_tool(
+        task_type=task_type, has_mask=..., enabled_providers=enabled,
+        all_candidates=True,
+    )
+
+    # 填充路由决策信息
+    trace.task_type = task_type
+    trace.route_candidates = tool_names
 
     for tool_name in tool_names:
         attempt = ToolAttempt(tool_name=tool_name, success=False)
@@ -359,7 +367,24 @@ async def run_image_tool(state: ImageEditState) -> dict:
     }
 ```
 
-**总结**：`run_image_tool` 在遍历候选工具时构建 `ToolAttempt` 序列，成功则记录最终选择，失败则记录错误原因。trace 作为返回 dict 的一部分合并到 state，供下游节点继续填充。
+**总结**：`run_image_tool` 在遍历候选工具前先通过 `select_tool()` 获取完整候选列表并写入 `trace.route_candidates`，随后对每个候选工具构建 `ToolAttempt` 序列。trace 作为返回 dict 的一部分合并到 state，供下游节点继续填充。
+
+### 4.2.1 persist_turn 中的 trace 持久化
+
+```python
+# workflow.py: persist_turn 节点内部（伪代码）
+
+async def persist_turn(state: ImageEditState) -> dict:
+    trace = state.get("turn_trace")
+    turn = store.update_turn(
+        turn_id,
+        ...,
+        trace=trace_to_dict(trace) if trace else {},
+    )
+    ...
+```
+
+`persist_turn` 从 state 中读取 `turn_trace`，通过 `trace_to_dict()` 序列化后传入 `store.update_turn()`。若 trace 为 None（workflow 中途崩溃），写入空 dict `{}`。
 
 ### 4.3 API 层（`api.py`）
 
@@ -401,6 +426,15 @@ trace 对象在 state dict 中传递时是 Python 对象，在 JSONB 列中存�
 ```python
 # trace.py
 
+# TurnTrace 的 __init__ 参数名白名单（排除 @property 派生字段）
+_TRACE_INIT_FIELDS = {
+    "task_type", "execution_mode", "route_candidates", "route_selected",
+    "prompt_enhance_provider", "prompt_enhance_latency_ms",
+    "prompt_enhance_fallback",
+    "qa_score", "qa_passed", "qa_retry_count",
+    "total_latency_ms",
+}
+
 def trace_to_dict(trace: TurnTrace) -> dict:
     """将 TurnTrace 序列化为 JSONB 兼容的 dict"""
     return {
@@ -424,9 +458,11 @@ def trace_to_dict(trace: TurnTrace) -> dict:
 
 def trace_from_dict(d: dict, turn_id: str, session_id: str) -> TurnTrace:
     """从 JSONB dict 反序列化 TurnTrace"""
+    if not d:
+        return TurnTrace(turn_id=turn_id, session_id=session_id)
     trace = TurnTrace(turn_id=turn_id, session_id=session_id, **{
         k: v for k, v in d.items()
-        if k not in ("tool_attempts",)
+        if k in _TRACE_INIT_FIELDS
     })
     for a in d.get("tool_attempts", []):
         trace.tool_attempts.append(ToolAttempt(**a))
@@ -457,26 +493,30 @@ trace 在前端的展示建议（本次设计不做详细 UI 设计）：
 
 TurnTrace 生命周期状态机覆盖所有路径：
 
-- `Created → RoutingDecided → PromptEnhanced → ToolExecuted → QACompleted → Persisted`（agentic 路径：`Created → RoutingDecided → Persisted`）
+- deterministic 路径：`Created → PromptEnhanced → ToolExecuted → QACompleted → Persisted`
+- 跳过增强路径（本地 inpaint）：`Created → ToolExecuted → QACompleted → Persisted`
+- agentic 路径：`Created → Persisted`（trace 仅含初始化字段）
 - `ToolExecuted` 状态时 `tool_attempts` 至少包含 1 个元素（全失败则最后一个是失败记录）
 - `Persisted` 是终态，不可变
 
 异常处理：
 - **workflow 中途崩溃（如 OOM）**：trace 未被持久化，`turns` 表的 `trace` 列保持默认 `{}`。前端展示时判空，不显示决策链路面板。
-- **所有工具均失败**：`tool_attempts` 包含全部失败记录，`route_selected` 为 None，`degradation_score` 为 N+1（N=候选数）。
+- **所有工具均失败**：`run_image_tool` 抛出 `RuntimeError`，workflow 进入 `fail` 节点。`fail` 节点需读取 `state["turn_trace"]` 并将其序列化写入 DB（与 `persist_turn` 相同逻辑），确保全失败的 trace 不丢失。`tool_attempts` 包含全部失败记录，`route_selected` 为 None，`degradation_score` 为 N（N=失败候选数，每个 +1）。
 - **replay 场景**：每次 replay 创建新 turn，trace 独立记录，不继承。
 - **cancel 场景**：job 被取消时 `persist_turn` 不执行，trace 不落库，与崩溃场景一致。
+- **agentic 路径**：trace 仅含 `turn_id`、`session_id`、`execution_mode`，其余字段为默认值。agentic 的详细步迹记录在 `agent_steps` 字段中，不重复写入 trace。
 
 ### 5.3 接口完备性
 
 | 设计逻辑中提到的操作 | 对应接口 |
 |-------------------|---------|
 | 初始化 trace | `run_workflow` 中创建 `TurnTrace` 对象 |
-| 填充路由决策 | `route_after_safety` 中设置 `route_candidates`、`execution_mode` |
+| 填充路由决策 | `run_image_tool` 中调用 `select_tool()` 后设置 `route_candidates`、`task_type` |
 | 记录工具尝试 | `run_image_tool` 中 `trace.tool_attempts.append(attempt)` |
 | 记录 prompt 增强 | `enhance_prompt` 中设置 `prompt_enhance_provider` 等字段 |
 | 序列化落库 | `persist_turn` 中 `store.update_turn(turn_id, trace=trace_to_dict(trace))` |
-| 反序列化读取 | `_to_turn_detail` 中 `trace_from_dict(turn.get("trace", {}))` |
+| 全失败时序列化 | `fail` 节点中同样调用 `trace_to_dict(trace)` 写入 DB |
+| 反序列化读取 | `_to_turn_detail` 中 `trace_from_dict(turn_record.trace)` |
 | 前端展示 | `TurnDetailResponse.trace` 字段通过 `GET /turns/{id}` 返回 |
 
 ### 5.4 层次一致性
@@ -498,3 +538,4 @@ TurnTrace 生命周期状态机覆盖所有路径：
 | 日期 | 变更内容 | 原因 |
 |------|---------|------|
 | 2026-08-09 | 初始版本 | 引入 trace 决策迹功能设计 |
+| 2026-08-09 | 修正：route_after_safety 定位、all-fail 持久化、degradation_score 计算、trace_from_dict 健壮性 | 代码检视发现设计与实现不符 |

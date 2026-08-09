@@ -23,7 +23,26 @@ from painterAgent.agents.demo_learning import (
 
 logger = logging.getLogger(__name__)
 
-# ── 系统提示（规划模型契约） ──────────────────────────────────────────────────
+# ── 系统提示（本地文本模型，无视觉） ────────────────────────────────────────────
+
+AGENTIC_SYSTEM_PROMPT_NO_VISION = """You are an image editing agent. Your job is to fulfill the user's editing request by calling the available tools in the right order.
+
+## Available Tools
+- `generate_image(prompt, aspect_ratio)`: Create a new image from text description.
+- `edit_image(image_url, prompt, mask_url, scope)`: Edit an existing image. Provide mask_url for local inpainting.
+
+## Rules
+1. Break complex requests into **multiple steps**, one tool call per step. Use the previous step's `image_url` as the input for the next step.
+2. You have **NO vision capability** — you cannot see or inspect images. Base your decisions on the user's instruction and the tool results you receive.
+3. When done and the **final result** is produced, summarize the result in Chinese and DO NOT call any more tools.
+4. If "用户示范方法" section is provided: **imitate the tool choice, prompt phrasing, and operation order**, but plan for the current instruction — do NOT reuse images from the demo.
+5. If "用户长期偏好" section is provided: treat it as the user's **persistent style constraints** (preferred tools, mask habits, prompt language). If demo and preference conflict, demo (recent specific) takes priority over preference (general tendency).
+
+## Working Memory
+You cannot "see" the images directly. The `image_url` returned by tools is your only reference to images. Always pass the latest `image_url` to the next `edit_image` call.
+"""
+
+# ── 系统提示（云端视觉模型，含 inspect_image） ──────────────────────────────────
 
 AGENTIC_SYSTEM_PROMPT = """You are an image editing agent. Your job is to fulfill the user's editing request by calling the available tools in the right order.
 
@@ -61,13 +80,29 @@ async def run_agentic_edit(state: ImageEditState) -> dict:
     if not instruction.strip():
         return {"degraded": True}
 
+    current_image_url = state.get("current_image_url") or ""
+    mask_image_url = state.get("mask_image_url") or ""
+
+    # 将已上传的图片/mask 作为上下文注入用户消息，让规划器知道可用资源
+    context_hints: list[str] = []
+    if current_image_url:
+        context_hints.append(f"当前图片 URL: {current_image_url}")
+    if mask_image_url:
+        context_hints.append(f"已上传遮罩图片 URL: {mask_image_url}")
+    if context_hints:
+        instruction = instruction + "\n\n[系统上下文]\n" + "\n".join(context_hints)
+
     session_id = state.get("session_id", "")
     turn_id = state.get("turn_id", "")
     project_id = state.get("project_id", "")
     enabled = config.enabled_providers()
 
+    # ── 检测本地规划器 ────────────────────────────────────────────────────────
+    is_ollama = config.agentic.planner_model.startswith("ollama:")
+    base_prompt = AGENTIC_SYSTEM_PROMPT_NO_VISION if is_ollama else AGENTIC_SYSTEM_PROMPT
+
     # ── 构建系统提示（偏好在前，示范在后） ────────────────────────────────────
-    system_prompt = AGENTIC_SYSTEM_PROMPT
+    system_prompt = base_prompt
 
     if config.agentic.pref_enabled:
         profile = build_preference_profile(
@@ -88,23 +123,36 @@ async def run_agentic_edit(state: ImageEditState) -> dict:
     tools = [
         tools_wrapper.generate_image,
         tools_wrapper.edit_image,
-        tools_wrapper.inspect_image,
     ]
+    if not is_ollama:
+        # qwen3 是纯文本模型，无法调用 inspect_image（视觉）
+        tools.append(tools_wrapper.inspect_image)
 
     # ── 运行 agentic 循环 ─────────────────────────────────────────────────────
-    client = get_client()
-    messages: list[dict[str, Any]] = [
-        {"role": "user", "content": instruction},
-    ]
-
     try:
-        response = client.chat.completions.create(
-            model=config.agentic.planner_model,
-            messages=messages,
-            tools=tools,
-            max_turns=config.agentic.max_turns,
-            temperature=0.1,
-        )
+        if is_ollama:
+            from painterAgent.tools.base import registry as _registry
+            ollama_llm = _registry.get("ollama_qwen3")
+            response = await ollama_llm.chat_tools(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": instruction}],
+                tools=tools,
+                max_turns=config.agentic.max_turns,
+                temperature=0.1,
+                model=config.agentic.planner_model.split(":", 1)[1],
+                session_id=session_id,
+                turn_id=turn_id,
+                purpose="agentic_planner",
+            )
+        else:
+            client = get_client()
+            response = client.chat.completions.create(
+                model=config.agentic.planner_model,
+                messages=[{"role": "user", "content": instruction}],
+                tools=tools,
+                max_turns=config.agentic.max_turns,
+                temperature=0.1,
+            )
     except Exception as exc:
         logger.warning("run_agentic_edit: planner call failed: %s", exc)
         return {"degraded": True}

@@ -66,12 +66,29 @@ class LamaImageTool(ImageTool):
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_lama(self):
-        """惰性加载 LaMa 模型"""
+        """惰性加载 LaMa 模型（强制 CPU，避免 CUDA 初始化错误）"""
         if self._lama is None:
+            import torch
             from simple_lama_inpainting import SimpleLama
 
-            self._lama = SimpleLama()
-            logger.info("LaMa model loaded")
+            # simple_lama_inpainting 的 torch.jit.load 默认会尝试加载到
+            # 保存时的设备（通常是 CUDA），触发 CUDA 初始化。当前环境的
+            # CUDA 库与 PyTorch 编译版本存在兼容性问题，导致 CUDA 初始化
+            # 失败（即使 torch.cuda.is_available() 返回 False）。
+            # monkey-patch torch.jit.load 注入 map_location="cpu"，加载
+            # 完成后立即恢复，避免影响其他模块（如 Moebius）。
+            _original_jit_load = torch.jit.load
+
+            def _patched_jit_load(*args, **kwargs):
+                kwargs.setdefault("map_location", "cpu")
+                return _original_jit_load(*args, **kwargs)
+
+            torch.jit.load = _patched_jit_load
+            try:
+                self._lama = SimpleLama(device=torch.device("cpu"))
+                logger.info("LaMa model loaded (CPU)")
+            finally:
+                torch.jit.load = _original_jit_load
         return self._lama
 
     async def generate(self, request: GenerateRequest) -> GenerateResult:
@@ -107,7 +124,7 @@ class LamaImageTool(ImageTool):
 
         # 执行推理（同步阻塞，放到线程池）
         lama = self._get_lama()
-        result_pil: Image.Image = await asyncio.to_thread(lama.run, image_pil, mask_pil)
+        result_pil: Image.Image = await asyncio.to_thread(lama, image_pil, mask_pil)
 
         image_id = f"img_{uuid.uuid4().hex[:12]}"
         local_path = self._save_pil(result_pil, image_id)
@@ -165,6 +182,6 @@ register_route(
         capabilities=frozenset({Capability.inpaint}),
         requires_mask=True,
         is_local=True,
-        priority=5,  # 比 doubao(0) 高，比 moebius(10) 低
+        priority=15,  # 物体移除优先，高于 moebius(10)
     )
 )
