@@ -39,6 +39,12 @@ class ImageEditState(TypedDict):
     job_id: Optional[str]
     turn_id: Optional[str]
 
+    # agentic 模式相关
+    execution_mode: Optional[str]  # auto / agentic / deterministic
+    degraded: bool  # agentic 降级标记
+    agent_steps: list[dict[str, Any]]  # AgentStep 序列化
+    agent_reply: Optional[str]  # 规划模型最终文本回复
+
 
 def create_initial_state(
     user_id: str,
@@ -80,4 +86,8 @@ def create_initial_state(
         "error": None,
         "job_id": None,
         "turn_id": None,
+        "execution_mode": None,
+        "degraded": False,
+        "agent_steps": [],
+        "agent_reply": None,
     }

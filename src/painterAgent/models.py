@@ -72,6 +72,20 @@ class QAResult(BaseModel):
     retry_suggestion: str = ""
 
 
+class AgentStep(BaseModel):
+    """代理步迹：一次 agentic turn 内的单步工具调用记录"""
+
+    index: int = 0
+    tool: str = ""  # 规划工具名：generate_image / edit_image / inspect_image
+    args: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)  # image_id/image_url/... 或文本评价
+    tool_impl: str = ""  # 实际后端工具名（如 moebius_inpaint / doubao_generate）
+    status: str = "succeeded"  # succeeded | failed | denied
+    error: str = ""
+    latency_ms: int = 0
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
 class TurnRecord(BaseModel):
     turn_id: str = ""
     session_id: str = ""
@@ -95,6 +109,8 @@ class TurnRecord(BaseModel):
     qa_passed: Optional[bool] = None
     qa_result: dict = Field(default_factory=dict)
     error_message: Optional[str] = None
+    agent_steps: list[AgentStep] = Field(default_factory=list)
+    execution_mode: str = ""  # deterministic / agentic / auto（+ 是否实际降级）
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
 
 
@@ -186,6 +202,8 @@ class TurnDetailResponse(BaseModel):
     qa_passed: Optional[bool] = None
     qa_result: dict = Field(default_factory=dict)
     error_message: Optional[str] = None
+    agent_steps: list[dict] = Field(default_factory=list)
+    execution_mode: str = ""
     created_at: str
 
 

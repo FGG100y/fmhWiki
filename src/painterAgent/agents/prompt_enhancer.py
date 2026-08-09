@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from painterAgent.llm.client import DoubaoLLM
+from painterAgent.config import config
 from painterAgent.state import ImageEditState
+from painterAgent.tools.router import Capability, invoke_with_fallback
 
 logger = logging.getLogger(__name__)
-
-_llm = DoubaoLLM()
 
 SYSTEM_PROMPT = """You are a prompt engineer specialized in text-to-image generation. Your job is to convert a user's natural language description into a high-quality image generation prompt.
 
@@ -40,10 +39,10 @@ Output: {"rewritten_prompt": "Minimalist logo design for a coffee brand, flat ve
 
 
 async def enhance_prompt(state: ImageEditState) -> dict:
-    """使用 DoubaoLLM 增强用户输入的 prompt。
+    """使用统一路由（invoke_with_fallback）增强用户输入的 prompt。
 
-    将口语化、模糊的用户指令翻译/扩写为高质量文生图 prompt，
-    同时生成负向 prompt。失败时回退到原始指令。
+    按 TEXT_LLM_ORDER 配置的优先级依次尝试候选文本 LLM（如 ollama+qwen3 →
+    doubao LLM），失败自动切换。全部失败时回退到原始指令。
     """
     instruction = state.get("user_instruction", "")
     if not instruction.strip():
@@ -52,13 +51,20 @@ async def enhance_prompt(state: ImageEditState) -> dict:
     session_id = state.get("session_id")
     turn_id = state.get("turn_id")
 
-    try:
-        result = await _llm.chat_json(
+    async def _invoke(client) -> dict:
+        return await client.chat_json(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=instruction,
             session_id=session_id,
             turn_id=turn_id,
             purpose="prompt_enhance",
+        )
+
+    try:
+        result = await invoke_with_fallback(
+            capability=Capability.prompt_enhance,
+            invoke=_invoke,
+            enabled_providers=config.enabled_providers(),
         )
         rewritten = result.get("rewritten_prompt", instruction)
         negative = result.get("negative_prompt", "")
@@ -69,5 +75,5 @@ async def enhance_prompt(state: ImageEditState) -> dict:
         )
         return {"rewritten_prompt": rewritten, "negative_prompt": negative}
     except Exception as e:
-        logger.warning("enhance_prompt failed, falling back to original: %s", e)
+        logger.warning("enhance_prompt: all candidates failed, falling back to original: %s", e)
         return {"rewritten_prompt": instruction, "negative_prompt": ""}

@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 
+from painterAgent.agents.agentic_editor import run_agentic_edit
 from painterAgent.agents.prompt_enhancer import enhance_prompt
 from painterAgent.agents.visual_qa import (
     route_by_qa,
@@ -15,7 +16,7 @@ from painterAgent.models import EditRequest, GenerateRequest, Intent
 from painterAgent.state import ImageEditState, create_initial_state
 from painterAgent.storage import store
 from painterAgent.tools.base import registry
-from painterAgent.tools.router import resolve_task_type, select_tool
+from painterAgent.tools.router import Capability, resolve_task_type, select_tool
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ async def run_image_tool(state: ImageEditState) -> dict:
             task_type, tool_name, bool(image_url), bool(mask_url), prompt[:80],
         )
         try:
-            if task_type == "generate":
+            if task_type == Capability.generate:
                 req = GenerateRequest(
                     prompt=prompt,
                     aspect_ratio="2K",
@@ -115,7 +116,7 @@ async def run_image_tool(state: ImageEditState) -> dict:
                 )
                 result = await tool.generate(req)
                 intent = Intent.generate_image.value
-            elif task_type == "inpaint":
+            elif task_type == Capability.inpaint:
                 req = EditRequest(
                     input_image_url=image_url,
                     prompt=prompt,
@@ -187,6 +188,8 @@ async def persist_turn(state: ImageEditState) -> dict:
         qa_passed=qa.get("passed"),
         qa_result=qa,
         error_message=state.get("error"),
+        agent_steps=state.get("agent_steps", []),
+        execution_mode=state.get("execution_mode", ""),
     )
     if turn and turn.output_image_id:
         store.save_image(
@@ -212,10 +215,18 @@ async def fail(state: ImageEditState) -> dict:
     return {}
 
 
-def route_after_safety(state: ImageEditState) -> Literal["enhance_prompt", "run_image_tool", "fail"]:
+def route_after_safety(state: ImageEditState) -> Literal["agentic_edit", "enhance_prompt", "run_image_tool", "fail"]:
     if state.get("error"):
         return "fail"
 
+    # 决策模式（两层开关）
+    mode = state.get("execution_mode", "auto")
+    agentic_enabled = config.agentic.enabled
+
+    if mode == "agentic" or (mode == "auto" and agentic_enabled):
+        return "agentic_edit"
+
+    # deterministic 或 auto 但能力关闭 → legacy 路径
     image_url = state.get("current_image_url") or ""
     mask_url = state.get("mask_image_url")
     task_type = resolve_task_type(
@@ -224,7 +235,7 @@ def route_after_safety(state: ImageEditState) -> Literal["enhance_prompt", "run_
     )
 
     # 文生图和纯编辑始终增强 prompt
-    if task_type in ("generate", "edit"):
+    if task_type in (Capability.generate, Capability.edit):
         return "enhance_prompt"
 
     # inpaint: 本地模型（moebius/lama）不使用 text prompt，增强无意义
@@ -235,11 +246,29 @@ def route_after_safety(state: ImageEditState) -> Literal["enhance_prompt", "run_
     return "enhance_prompt"
 
 
+def route_after_agentic(state: ImageEditState) -> Literal["enhance_prompt", "run_image_tool", "persist_turn"]:
+    """agentic_edit 之后的路由：成功则 persist，降级则走 legacy"""
+    if state.get("degraded"):
+        logger.info("route_after_agentic: degraded, falling back to legacy path")
+        image_url = state.get("current_image_url") or ""
+        mask_url = state.get("mask_image_url")
+        task_type = resolve_task_type(
+            has_image=bool(image_url),
+            has_mask=bool(mask_url),
+        )
+        if task_type in (Capability.generate, Capability.edit):
+            return "enhance_prompt"
+        return "run_image_tool"
+
+    return "persist_turn"
+
+
 def build_workflow() -> StateGraph:
     workflow = StateGraph(ImageEditState)
 
     workflow.add_node("load_session", load_session)
     workflow.add_node("safety_check", safety_check)
+    workflow.add_node("agentic_edit", run_agentic_edit)
     workflow.add_node("enhance_prompt", enhance_prompt)
     workflow.add_node("run_image_tool", run_image_tool)
     workflow.add_node("visual_qa", visual_qa)
@@ -253,9 +282,21 @@ def build_workflow() -> StateGraph:
         "safety_check",
         route_after_safety,
         {
+            "agentic_edit": "agentic_edit",
             "enhance_prompt": "enhance_prompt",
             "run_image_tool": "run_image_tool",
             "fail": "fail",
+        },
+    )
+
+    # agentic_edit 之后：成功直接 persist，降级走 legacy
+    workflow.add_conditional_edges(
+        "agentic_edit",
+        route_after_agentic,
+        {
+            "enhance_prompt": "enhance_prompt",
+            "run_image_tool": "run_image_tool",
+            "persist_turn": "persist_turn",
         },
     )
 
@@ -290,6 +331,7 @@ async def run_workflow(
     mask_image_id: str | None = None,
     mask_image_url: str | None = None,
     turn_id: str | None = None,
+    execution_mode: str = "auto",
 ) -> dict[str, Any]:
     if not turn_id:
         raise ValueError("turn_id is required")
@@ -310,6 +352,7 @@ async def run_workflow(
     )
 
     initial["turn_id"] = turn_id
+    initial["execution_mode"] = execution_mode
 
     async for event in graph.astream(initial):
         for node_name, node_output in event.items():

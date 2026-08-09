@@ -11,7 +11,7 @@ from painterAgent.config import config
 from painterAgent.llm.moebius_client import MoebiusClient
 from painterAgent.models import EditRequest, EditResult, GenerateRequest, GenerateResult
 from painterAgent.tools.base import ImageTool, registry
-from painterAgent.tools.router import ToolMeta, register_tool_meta
+from painterAgent.tools.router import Capability, ModelRoute, register_route
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +83,11 @@ _moebius_tool = MoebiusImageTool()
 registry.register("moebius_inpaint", _moebius_tool)
 registry.register("moebius_edit", _moebius_tool)
 
-register_tool_meta(
-    ToolMeta(
+register_route(
+    ModelRoute(
         name="moebius_inpaint",
-        task_types=frozenset({"inpaint"}),
+        provider="moebius",
+        capabilities=frozenset({Capability.inpaint}),
         requires_mask=True,
         is_local=True,
         priority=10,

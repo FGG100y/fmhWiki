@@ -7,7 +7,7 @@ from painterAgent.config import config
 from painterAgent.llm.client import DoubaoImageClient
 from painterAgent.models import EditRequest, EditResult, GenerateRequest, GenerateResult
 from painterAgent.tools.base import ImageTool, registry
-from painterAgent.tools.router import ToolMeta, register_tool_meta
+from painterAgent.tools.router import Capability, ModelRoute, register_route
 
 
 class DoubaoImageTool(ImageTool):
@@ -144,12 +144,15 @@ registry.register("doubao_edit", _doubao_tool)
 registry.register("doubao_inpaint", _doubao_tool)
 
 # 注册元数据（云端兜底，priority 最低）
-register_tool_meta(
-    ToolMeta(name="doubao_generate", task_types=frozenset({"generate"}), is_local=False, priority=0)
+register_route(
+    ModelRoute(name="doubao_generate", provider="doubao",
+               capabilities=frozenset({Capability.generate}), is_local=False, priority=0)
 )
-register_tool_meta(
-    ToolMeta(name="doubao_edit", task_types=frozenset({"edit"}), is_local=False, priority=0)
+register_route(
+    ModelRoute(name="doubao_edit", provider="doubao",
+               capabilities=frozenset({Capability.edit}), is_local=False, priority=0)
 )
-register_tool_meta(
-    ToolMeta(name="doubao_inpaint", task_types=frozenset({"inpaint"}), is_local=False, priority=0)
+register_route(
+    ModelRoute(name="doubao_inpaint", provider="doubao",
+               capabilities=frozenset({Capability.inpaint}), is_local=False, priority=0)
 )

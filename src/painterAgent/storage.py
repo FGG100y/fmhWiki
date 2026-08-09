@@ -88,6 +88,10 @@ class MemoryStore:
     def get_session(self, session_id: str) -> Optional[dict]:
         return self._sessions.get(session_id)
 
+    def list_sessions_by_project(self, project_id: str) -> list[dict]:
+        """列出项目下所有会话（用于偏好聚合等跨会话查询）"""
+        return [s for s in self._sessions.values() if s.get("project_id") == project_id]
+
     def get_session_with_turns(self, session_id: str) -> Optional[SessionResponse]:
         session = self._sessions.get(session_id)
         if not session:
@@ -264,6 +268,8 @@ class MemoryStore:
             qa_passed=turn.qa_passed,
             qa_result=turn.qa_result,
             error_message=turn.error_message,
+            agent_steps=[s.model_dump() if hasattr(s, 'model_dump') else s for s in (turn.agent_steps or [])],
+            execution_mode=turn.execution_mode or "",
             created_at=turn.created_at,
         )
 
@@ -378,6 +384,12 @@ class PostgresStore:
         query = "SELECT * FROM sessions WHERE session_id = %s"
         result = self._execute(query, (session_id,), fetch=True)
         return dict(result[0]) if result else None
+
+    def list_sessions_by_project(self, project_id: str) -> list[dict]:
+        """列出项目下所有会话"""
+        query = "SELECT * FROM sessions WHERE project_id = %s"
+        result = self._execute(query, (project_id,), fetch=True)
+        return [dict(r) for r in result] if result else []
 
     def get_session_with_turns(self, session_id: str) -> Optional[SessionResponse]:
         session = self.get_session(session_id)
@@ -608,6 +620,8 @@ class PostgresStore:
             qa_passed=turn.get("qa_passed"),
             qa_result=turn.get("qa_result") or {},
             error_message=turn.get("error_message"),
+            agent_steps=_json_loads(turn.get("agent_steps"), default=[]),
+            execution_mode=turn.get("execution_mode") or "",
             created_at=turn["created_at"].isoformat() if isinstance(turn["created_at"], datetime) else turn["created_at"],
         )
 
@@ -615,6 +629,18 @@ class PostgresStore:
         if not image_id:
             return None
         return self.get_image(image_id)
+
+
+def _json_loads(value, default=None):
+    """安全 json.loads：处理已解析的 dict/list 或 None。"""
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
 
 
 # 根据环境变量选择存储实现

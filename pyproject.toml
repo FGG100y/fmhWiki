@@ -16,6 +16,7 @@ dependencies = [
     "psycopg2-binary>=2.9,<3.0",
     "dramatiq[redis]>=1.17,<2.0",
     "redis>=5.0,<6.0",
+    "aisuite>=0.1.14",
 ]
 
 [project.optional-dependencies]

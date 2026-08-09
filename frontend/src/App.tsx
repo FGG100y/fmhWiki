@@ -64,6 +64,8 @@ export default function App() {
     hasPreviousSession,
     resumeSession,
     dismissPreviousSession,
+    executionMode,
+    setExecutionMode,
   } = useSession();
 
   const sidebarCollapsed = manualCollapsed;
@@ -245,6 +247,8 @@ export default function App() {
               maskFilename={maskFilename}
               sketchFilename={sketchFilename}
               currentJobId={currentJobId}
+              executionMode={executionMode}
+              onModeChange={setExecutionMode}
               onSubmit={handleSend}
               onCancel={cancelExecution}
             />

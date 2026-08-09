@@ -99,6 +99,7 @@ def execute_workflow(
     reference_image_ids: list[str] | None = None,
     mask_image_id: str | None = None,
     mask_image_url: str | None = None,
+    execution_mode: str = "auto",
 ) -> None:
     """执行 LangGraph workflow 并更新任务状态"""
     logger.info(
@@ -128,6 +129,7 @@ def execute_workflow(
                     mask_image_id=mask_image_id,
                     mask_image_url=mask_image_url,
                     turn_id=turn_id,
+                    execution_mode=execution_mode,
                 )
             )
         finally:

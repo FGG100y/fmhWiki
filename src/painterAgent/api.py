@@ -365,6 +365,8 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
     # 入队异步任务
     from painterAgent.worker import execute_workflow
 
+    execution_mode = req.options.get("mode", "auto") if req.options else "auto"
+
     execute_workflow.send(
         session_id=session_id,
         turn_id=turn.turn_id,
@@ -378,6 +380,7 @@ async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
         reference_image_ids=req.reference_image_ids,
         mask_image_id=req.mask_image_id,
         mask_image_url=mask_image_url,
+        execution_mode=execution_mode,
     )
 
     logger.info("execute_turn: queued job=%s turn=%s", job_id, turn.turn_id)

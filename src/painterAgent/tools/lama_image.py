@@ -10,7 +10,7 @@ from PIL import Image
 from painterAgent.config import config
 from painterAgent.models import EditRequest, EditResult, GenerateRequest, GenerateResult
 from painterAgent.tools.base import ImageTool, registry
-from painterAgent.tools.router import ToolMeta, register_tool_meta
+from painterAgent.tools.router import Capability, ModelRoute, register_route
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +158,11 @@ _lama_tool = LamaImageTool()
 registry.register("lama_inpaint", _lama_tool)
 registry.register("lama_edit", _lama_tool)
 
-register_tool_meta(
-    ToolMeta(
+register_route(
+    ModelRoute(
         name="lama_inpaint",
-        task_types=frozenset({"inpaint"}),
+        provider="lama",
+        capabilities=frozenset({Capability.inpaint}),
         requires_mask=True,
         is_local=True,
         priority=5,  # 比 doubao(0) 高，比 moebius(10) 低

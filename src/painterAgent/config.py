@@ -105,15 +105,74 @@ class LaMaConfig:
 
 
 @dataclass
+class OllamaConfig:
+    """ollama 本地模型配置"""
+
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
+    )
+    base_url: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    )
+    model: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen3:8b")
+    )
+
+
+@dataclass
+class AgenticConfig:
+    """Agentic 多步编辑配置"""
+
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("AGENTIC_EDIT_ENABLED", "false").lower() == "true"
+    )
+    planner_model: str = field(
+        default_factory=lambda: os.getenv("AGENTIC_MODEL", "openai:doubao-seed-1-6-250615")
+    )
+    max_turns: int = field(
+        default_factory=lambda: int(os.getenv("AGENTIC_MAX_TURNS", "5"))
+    )
+    max_tool_calls: int = field(
+        default_factory=lambda: int(os.getenv("AGENTIC_MAX_TOOL_CALLS", "8"))
+    )
+    vision_model: str = field(
+        default_factory=lambda: os.getenv("VISION_MODEL", "openai:doubao-1-5-vision-pro-32k-250115")
+    )
+    consecutive_fail_limit: int = field(
+        default_factory=lambda: int(os.getenv("AGENTIC_CONSECUTIVE_FAIL_LIMIT", "3"))
+    )
+    demo_enabled: bool = field(
+        default_factory=lambda: os.getenv("AGENTIC_DEMO_ENABLED", "true").lower() == "true"
+    )
+    demo_max_steps: int = field(
+        default_factory=lambda: int(os.getenv("AGENTIC_DEMO_MAX_STEPS", "6"))
+    )
+    pref_enabled: bool = field(
+        default_factory=lambda: os.getenv("AGENTIC_PREFERENCE_ENABLED", "true").lower() == "true"
+    )
+    pref_min_turns: int = field(
+        default_factory=lambda: int(os.getenv("AGENTIC_PREFERENCE_MIN_TURNS", "3"))
+    )
+
+
+@dataclass
 class AppConfig:
     doubao: DoubaoConfig = field(default_factory=DoubaoConfig)
     moebius: MoebiusConfig = field(default_factory=MoebiusConfig)
     lama: LaMaConfig = field(default_factory=LaMaConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    agentic: AgenticConfig = field(default_factory=AgenticConfig)
     image_tool: ImageToolConfig = field(default_factory=ImageToolConfig)
     debug: bool = field(
         default_factory=lambda: os.getenv("DEBUG", "false").lower() == "true"
     )
     max_qa_retries: int = 2
+
+    @property
+    def text_llm_order(self) -> list[str]:
+        """文本 LLM 候选顺序（逗号分隔，第一个优先；默认 ollama,doubao）"""
+        raw = os.getenv("TEXT_LLM_ORDER", "ollama,doubao")
+        return [p.strip() for p in raw.split(",") if p.strip()]
 
     def enabled_providers(self) -> set[str]:
         """返回当前可用的 provider 集合"""
@@ -124,6 +183,8 @@ class AppConfig:
             providers.add("moebius")
         if self.lama.enabled:
             providers.add("lama")
+        if self.ollama.enabled:
+            providers.add("ollama")
         return providers
 
 

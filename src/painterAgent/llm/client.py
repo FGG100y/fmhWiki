@@ -13,6 +13,8 @@ from openai import AsyncOpenAI
 from painterAgent.config import config
 from painterAgent.models import ModelCallRecord
 from painterAgent.storage import store
+from painterAgent.tools.base import registry
+from painterAgent.tools.router import Capability, ModelRoute, register_route
 
 logger = logging.getLogger(__name__)
 
@@ -301,3 +303,19 @@ class DoubaoImageClient:
 
     async def close(self) -> None:
         await self.http.aclose()
+
+
+# ── 注册 doubao LLM 路由（文本能力） ───────────────────────────────────────────
+
+_doubao_llm = DoubaoLLM()
+registry.register("doubao_llm", _doubao_llm)
+
+register_route(
+    ModelRoute(
+        name="doubao_llm",
+        provider="doubao",
+        capabilities=frozenset({Capability.prompt_enhance}),
+        is_local=False,
+        priority=0,  # 由 select() 中的 TEXT_LLM_ORDER 折算覆盖
+    )
+)

@@ -31,6 +31,18 @@ export interface TurnDetail {
   qa_passed: boolean | null;
   qa_result: Record<string, unknown>;
   error_message: string | null;
+  agent_steps: Array<{
+    index: number;
+    tool: string;
+    args: Record<string, unknown>;
+    result: Record<string, unknown>;
+    tool_impl: string;
+    status: string;
+    error: string;
+    latency_ms: number;
+    created_at: string;
+  }>;
+  execution_mode: string;
   created_at: string;
 }
 

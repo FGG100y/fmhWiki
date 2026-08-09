@@ -34,7 +34,10 @@ export interface SessionState {
   canUndo: boolean;
   canRedo: boolean;
   hasPreviousSession: boolean;
+  executionMode: "auto" | "agentic" | "deterministic";
 }
+
+export type ExecutionMode = "auto" | "agentic" | "deterministic";
 
 const LAST_WORK_SESSION_KEY = "painterAgent:last-work-session";
 
@@ -58,6 +61,7 @@ export function useSession() {
     canUndo: false,
     canRedo: false,
     hasPreviousSession: false,
+    executionMode: "auto",
   });
 
   const sessionIdRef = useRef<string | null>(null);
@@ -188,6 +192,7 @@ export function useSession() {
           current_turn_id: state.currentTurnId ?? undefined,
           uploaded_image_id: uploadedImageId ?? undefined,
           mask_image_id: maskImageId ?? undefined,
+          options: { mode: state.executionMode },
         });
         localStorage.setItem(LAST_WORK_SESSION_KEY, sid);
         
@@ -465,5 +470,9 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession, dismissPreviousSession };
+  const setExecutionMode = useCallback((mode: ExecutionMode) => {
+    setState((prev) => ({ ...prev, executionMode: mode }));
+  }, []);
+
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession, dismissPreviousSession, setExecutionMode };
 }
