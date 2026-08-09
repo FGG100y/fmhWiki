@@ -1,16 +1,16 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import MaskCanvas from "./MaskCanvas";
 import SketchCanvas from "./SketchCanvas";
+import type { ActiveTool } from "./ActivityBar";
 
 interface Props {
   inputUrl: string | null;
   outputUrl: string | null;
   instruction: string | null;
   loading: boolean;
-  maskDrawingMode: boolean;
+  activeTool: ActiveTool;
   onMaskDrawingConfirm: (maskBlob: Blob) => void;
   onMaskDrawingCancel: () => void;
-  sketchDrawingMode: boolean;
   onSketchDrawingConfirm: (blob: Blob) => void;
   onSketchDrawingCancel: () => void;
 }
@@ -78,7 +78,7 @@ async function shareImage(url: string): Promise<"shared" | "copied" | "failed"> 
       await navigator.share({
         files: [file],
         title: "我的修图作品",
-        text: "用多轮修图 Agent 生成",
+        text: "用Painter Agent 生成",
       });
       return "shared";
     }
@@ -102,10 +102,9 @@ export default function ImageViewer({
   outputUrl,
   instruction,
   loading,
-  maskDrawingMode,
+  activeTool,
   onMaskDrawingConfirm,
   onMaskDrawingCancel,
-  sketchDrawingMode,
   onSketchDrawingConfirm,
   onSketchDrawingCancel,
 }: Props) {
@@ -222,65 +221,60 @@ export default function ImageViewer({
     else if (result === "failed") showToast("分享失败，请改用下载");
   };
 
+  const isShowingOutput = !!outputUrl;
+  const mainUrl = outputUrl ?? inputUrl;
+  const showReference = !!inputUrl && isShowingOutput && inputUrl !== outputUrl;
+
+  if (activeTool === "mask-draw") {
+    return (
+      <main className="viewer">
+        <MaskCanvas
+          imageUrl={inputUrl || outputUrl || ""}
+          onConfirm={onMaskDrawingConfirm}
+          onCancel={onMaskDrawingCancel}
+        />
+        {toast && <div className="toast">{toast}</div>}
+      </main>
+    );
+  }
+
+  if (activeTool === "whiteboard") {
+    return (
+      <main className="viewer">
+        <SketchCanvas
+          onConfirm={onSketchDrawingConfirm}
+          onCancel={onSketchDrawingCancel}
+        />
+        {toast && <div className="toast">{toast}</div>}
+      </main>
+    );
+  }
+
   return (
     <main className="viewer">
-      <div className="viewer-grid">
+      <div className="viewer-focus">
         <div className="image-panel">
           <div className="image-label">
-            输入图片
-            {maskDrawingMode && <span className="mask-drawing-badge">绘制 Mask 中</span>}
-            {sketchDrawingMode && <span className="mask-drawing-badge">白板绘制中</span>}
-          </div>
-          <div className="image-container">
-            {maskDrawingMode ? (
-              <MaskCanvas
-                imageUrl={inputUrl || outputUrl || ""}
-                onConfirm={onMaskDrawingConfirm}
-                onCancel={onMaskDrawingCancel}
-              />
-            ) : sketchDrawingMode ? (
-              <SketchCanvas
-                onConfirm={onSketchDrawingConfirm}
-                onCancel={onSketchDrawingCancel}
-              />
-            ) : (inputUrl || outputUrl) ? (
-                <img
-                  src={inputUrl || ""}
-                  alt="输入图片"
-                  className="zoomable"
-                  onClick={() => setZoomUrl(inputUrl)}
-                  title="点击放大"
-                />
-              )
-            : (
-              <div className="image-placeholder">
-                {loading ? "生成中…" : "首轮将从文字生成图片"}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="image-panel">
-          <div className="image-label">
-            结果图片
-            {outputUrl && (
+            {isShowingOutput ? "结果图片" : "输入图片"}
+            {isShowingOutput && (
               <span className="image-actions">
                 <button
                   className="btn-download"
-                  onClick={() => handleShare(outputUrl)}
+                  onClick={() => handleShare(outputUrl!)}
                   title="分享到其他 App"
                 >
                   分享
                 </button>
                 <button
                   className="btn-download"
-                  onClick={() => handleCopy(outputUrl)}
+                  onClick={() => handleCopy(outputUrl!)}
                   title="复制图片到剪贴板"
                 >
                   复制
                 </button>
                 <button
                   className="btn-download"
-                  onClick={() => downloadImage(outputUrl)}
+                  onClick={() => downloadImage(outputUrl!)}
                   title="下载结果图"
                 >
                   下载
@@ -288,13 +282,13 @@ export default function ImageViewer({
               </span>
             )}
           </div>
-          <div className="image-container">
-            {outputUrl ? (
+          <div className="image-container output-container">
+            {mainUrl ? (
               <img
-                src={outputUrl}
-                alt="结果图片"
+                src={mainUrl}
+                alt={isShowingOutput ? "结果图片" : "输入图片"}
                 className="zoomable"
-                onClick={() => setZoomUrl(outputUrl)}
+                onClick={() => setZoomUrl(mainUrl)}
                 title="点击放大"
               />
             ) : (
@@ -308,6 +302,18 @@ export default function ImageViewer({
             )}
           </div>
         </div>
+
+        {showReference && (
+          <div className="reference-thumb">
+            <div className="reference-label">输入</div>
+            <img
+              src={inputUrl!}
+              alt="输入图片"
+              onClick={() => setZoomUrl(inputUrl)}
+              title="点击放大输入图"
+            />
+          </div>
+        )}
       </div>
       {instruction && (
         <div className="current-instruction">

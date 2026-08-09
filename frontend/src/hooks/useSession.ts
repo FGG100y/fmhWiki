@@ -29,8 +29,6 @@ export interface SessionState {
   maskImageId: string | null;
   maskImageUrl: string | null;
   maskFilename: string | null;
-  maskDrawingMode: boolean;
-  sketchDrawingMode: boolean;
   sketchFilename: string | null;
   currentJobId: string | null;
   canUndo: boolean;
@@ -55,8 +53,6 @@ export function useSession() {
     maskImageId: null,
     maskImageUrl: null,
     maskFilename: null,
-    maskDrawingMode: false,
-    sketchDrawingMode: false,
     sketchFilename: null,
     currentJobId: null,
     canUndo: false,
@@ -205,7 +201,6 @@ export function useSession() {
                   maskImageId: null,
                   maskImageUrl: null,
                   maskFilename: null,
-                  sketchDrawingMode: false,
                   sketchFilename: null,
                   currentJobId: null,
                 }));
@@ -223,7 +218,6 @@ export function useSession() {
                 maskImageId: null,
                 maskImageUrl: null,
                 maskFilename: null,
-                sketchDrawingMode: false,
                 sketchFilename: null,
                 currentJobId: null,
               }));
@@ -241,7 +235,6 @@ export function useSession() {
             maskImageId: null,
             maskImageUrl: null,
             maskFilename: null,
-            sketchDrawingMode: false,
             sketchFilename: null,
           }));
           await refresh(sid, true);
@@ -264,7 +257,6 @@ export function useSession() {
       uploadedImageUrl: imageUrl,
       currentInputUrl: imageUrl,
       sketchFilename: null,
-      sketchDrawingMode: false,
     }));
   }, []);
 
@@ -283,22 +275,6 @@ export function useSession() {
       maskImageId: null,
       maskImageUrl: null,
       maskFilename: null,
-      maskDrawingMode: false,
-    }));
-  }, []);
-
-  const startMaskDrawing = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      maskDrawingMode: true,
-      sketchDrawingMode: false,
-    }));
-  }, []);
-
-  const cancelMaskDrawing = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      maskDrawingMode: false,
     }));
   }, []);
 
@@ -314,33 +290,16 @@ export function useSession() {
           maskImageId: resp.image_id,
           maskImageUrl: resp.image_url,
           maskFilename: "已绘制",
-          maskDrawingMode: false,
         }));
       } catch (err) {
         setState((prev) => ({
           ...prev,
-          maskDrawingMode: false,
           error: err instanceof Error ? err.message : "Mask 上传失败",
         }));
       }
     },
     []
   );
-
-  const startSketchDrawing = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      sketchDrawingMode: true,
-      maskDrawingMode: false,
-    }));
-  }, []);
-
-  const cancelSketchDrawing = useCallback(() => {
-    setState((prev) => ({
-      ...prev,
-      sketchDrawingMode: false,
-    }));
-  }, []);
 
   const handleSketchDrawingConfirm = useCallback(
     async (blob: Blob) => {
@@ -354,13 +313,11 @@ export function useSession() {
           uploadedImageId: resp.image_id,
           uploadedImageUrl: resp.image_url,
           currentInputUrl: resp.image_url,
-          sketchDrawingMode: false,
           sketchFilename: "白板草稿",
         }));
       } catch (err) {
         setState((prev) => ({
           ...prev,
-          sketchDrawingMode: false,
           error: err instanceof Error ? err.message : "白板草稿上传失败",
         }));
       }
@@ -503,5 +460,5 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, startMaskDrawing, cancelMaskDrawing, handleMaskDrawingConfirm, startSketchDrawing, cancelSketchDrawing, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession };
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession };
 }

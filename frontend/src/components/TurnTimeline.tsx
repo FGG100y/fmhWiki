@@ -7,6 +7,8 @@ interface Props {
   onSelect: (turnId: string) => void;
   onRetry: (turnId: string) => void;
   onDelete: (turnId: string) => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }
 
 interface FlatNode {
@@ -63,7 +65,7 @@ function BranchLines({ depth, isLast }: { depth: number; isLast: boolean }) {
   );
 }
 
-export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, onDelete }: Props) {
+export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, onDelete, collapsed, onToggleCollapse }: Props) {
   const { nodes: flatNodes, rootIds } = useMemo(() => buildTree(turns), [turns]);
 
   const [collapsedRoots, setCollapsedRoots] = useState<Set<string>>(() => {
@@ -98,10 +100,33 @@ export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, 
     [flatNodes, collapsedRoots]
   );
 
+  if (collapsed) {
+    return (
+      <aside className="timeline timeline-collapsed">
+        <button
+          className="timeline-expand-btn"
+          onClick={onToggleCollapse}
+          title="展开时间线"
+        >
+          ☰
+        </button>
+      </aside>
+    );
+  }
+
   if (turns.length === 0) {
     return (
       <aside className="timeline">
-        <h3>编辑历史</h3>
+        <div className="timeline-header">
+          <h3>编辑历史</h3>
+          <button
+            className="timeline-collapse-btn"
+            onClick={onToggleCollapse}
+            title="折叠时间线"
+          >
+            ✕
+          </button>
+        </div>
         <p className="timeline-empty">暂无编辑记录</p>
       </aside>
     );
@@ -109,7 +134,16 @@ export default function TurnTimeline({ turns, currentTurnId, onSelect, onRetry, 
 
   return (
     <aside className="timeline">
-      <h3>编辑历史</h3>
+      <div className="timeline-header">
+        <h3>编辑历史</h3>
+        <button
+          className="timeline-collapse-btn"
+          onClick={onToggleCollapse}
+          title="折叠时间线"
+        >
+          ✕
+        </button>
+      </div>
       <ul className="timeline-list">
         {visibleNodes.map((node) => {
           const isRoot = node.turn.turn_id === node.rootId;

@@ -5,18 +5,58 @@ interface Props {
   onCancel: () => void;
 }
 
-const CANVAS_SIZE = 512;
 const COLORS = ["#000000", "#e74c3c", "#3498db", "#2ecc71", "#f1c40f", "#9b59b6"];
+const MIN_SIZE = 512;
+const MAX_SIZE = 4096;
+
+interface CanvasDims {
+  width: number;
+  height: number;
+}
+
+/** Brush slider range scales with the shorter canvas dimension */
+function brushRange(shortSide: number) {
+  return {
+    min: Math.max(1, Math.round(shortSide * 0.002)),
+    max: Math.round(shortSide * 0.10),
+  };
+}
+
+function defaultBrush(shortSide: number) {
+  return Math.round(shortSide * 0.015);
+}
 
 export default function SketchCanvas({ onConfirm, onCancel }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const drawingRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
 
+  const [canvasDims, setCanvasDims] = useState<CanvasDims>({ width: MIN_SIZE, height: MIN_SIZE });
   const [tool, setTool] = useState<"draw" | "erase">("draw");
   const [color, setColor] = useState("#000000");
-  const [brushSize, setBrushSize] = useState(8);
+  const [brushSize, setBrushSize] = useState(defaultBrush(MIN_SIZE));
 
+  // Observe container size and set canvas dimensions to fill available space
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.floor(entry.contentRect.width)));
+        const h = Math.min(MAX_SIZE, Math.max(MIN_SIZE, Math.floor(entry.contentRect.height)));
+        setCanvasDims((prev) =>
+          prev.width === w && prev.height === h ? prev : { width: w, height: h }
+        );
+      }
+    });
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  // Initialize canvas with white background when dimensions change
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -24,7 +64,12 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
     if (!ctx) return;
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }, []);
+  }, [canvasDims]);
+
+  const shortSide = Math.min(canvasDims.width, canvasDims.height);
+  const brush = brushRange(shortSide);
+  // Clamp current brush value within range (handles resize shrinking the range)
+  const clampedBrush = Math.min(brush.max, Math.max(brush.min, brushSize));
 
   const getPos = useCallback((e: React.PointerEvent) => {
     const canvas = canvasRef.current;
@@ -45,7 +90,7 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
       ctx.globalCompositeOperation =
         tool === "erase" ? "destination-out" : "source-over";
       ctx.strokeStyle = tool === "erase" ? "rgba(0,0,0,1)" : color;
-      ctx.lineWidth = brushSize;
+      ctx.lineWidth = clampedBrush;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.beginPath();
@@ -53,7 +98,7 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
       ctx.lineTo(x2, y2);
       ctx.stroke();
     },
-    [tool, color, brushSize]
+    [tool, color, clampedBrush]
   );
 
   const handlePointerDown = useCallback(
@@ -95,8 +140,8 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const exportCanvas = document.createElement("canvas");
-    exportCanvas.width = CANVAS_SIZE;
-    exportCanvas.height = CANVAS_SIZE;
+    exportCanvas.width = canvas.width;
+    exportCanvas.height = canvas.height;
     const ctx = exportCanvas.getContext("2d");
     if (!ctx) return;
     ctx.fillStyle = "#ffffff";
@@ -108,7 +153,7 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
   }, [onConfirm]);
 
   return (
-    <div className="mask-canvas-wrapper">
+    <div className="sketch-canvas-wrapper">
       <div className="mask-canvas-toolbar">
         <button
           className={`mask-tool-btn ${tool === "draw" ? "active" : ""}`}
@@ -137,14 +182,14 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
         </span>
         <input
           type="range"
-          min={2}
-          max={60}
-          value={brushSize}
+          min={brush.min}
+          max={brush.max}
+          value={clampedBrush}
           onChange={(e) => setBrushSize(Number(e.target.value))}
           className="mask-brush-slider"
-          title={`画笔大小: ${brushSize}px`}
+          title={`画笔大小: ${clampedBrush}px`}
         />
-        <span className="mask-brush-label">{brushSize}px</span>
+        <span className="mask-brush-label">{clampedBrush}px</span>
         <button className="mask-tool-btn" onClick={handleClear} title="清除全部">
           🗑️
         </button>
@@ -157,13 +202,14 @@ export default function SketchCanvas({ onConfirm, onCancel }: Props) {
         </button>
       </div>
       <div
-        className="mask-canvas-container"
+        className="sketch-canvas-container"
+        ref={containerRef}
         style={{ cursor: tool === "draw" ? "crosshair" : "cell" }}
       >
         <canvas
           ref={canvasRef}
-          width={CANVAS_SIZE}
-          height={CANVAS_SIZE}
+          width={canvasDims.width}
+          height={canvasDims.height}
           className="sketch-canvas"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
