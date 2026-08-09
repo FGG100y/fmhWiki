@@ -111,7 +111,7 @@ def select_tool(
 
     if all_candidates:
         result = [name for _, name in candidates]
-        logger.info("select_tool: task=%s candidates=%s", task_type, result)
+        logger.info("select_tool: task=%s has_mask=%s enabled=%s candidates=%s", task_type, has_mask, enabled, result)
         return result
 
     chosen = candidates[0][1]

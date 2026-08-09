@@ -63,6 +63,7 @@ export default function App() {
     cancelExecution,
     hasPreviousSession,
     resumeSession,
+    dismissPreviousSession,
   } = useSession();
 
   const sidebarCollapsed = manualCollapsed;
@@ -205,6 +206,9 @@ export default function App() {
           <span>检测到上次会话记录</span>
           <button onClick={resumeSession} disabled={loading}>
             恢复上次会话
+          </button>
+          <button className="resume-bar-dismiss" onClick={dismissPreviousSession} title="忽略">
+            ✕
           </button>
         </div>
       )}

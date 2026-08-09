@@ -85,12 +85,17 @@ async def run_image_tool(state: ImageEditState) -> dict:
         has_image=bool(image_url),
         has_mask=bool(mask_url),
     )
+    enabled = config.enabled_providers()
+    logger.info(
+        "run_image_tool: has_image=%s has_mask=%s task_type=%s enabled_providers=%s",
+        bool(image_url), bool(mask_url), task_type, enabled,
+    )
 
     # 获取所有候选工具（按 priority 降序排列）
     tool_names = select_tool(
         task_type=task_type,
         has_mask=bool(mask_url),
-        enabled_providers=config.enabled_providers(),
+        enabled_providers=enabled,
         all_candidates=True,
     )
 

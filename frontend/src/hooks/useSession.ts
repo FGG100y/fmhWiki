@@ -150,6 +150,11 @@ export function useSession() {
     };
   }, [refresh]);
 
+  const dismissPreviousSession = useCallback(() => {
+    localStorage.removeItem(LAST_WORK_SESSION_KEY);
+    setState((prev) => ({ ...prev, hasPreviousSession: false }));
+  }, []);
+
   const resumeSession = useCallback(async () => {
     const resumeId = localStorage.getItem(LAST_WORK_SESSION_KEY);
     if (!resumeId) return;
@@ -460,5 +465,5 @@ export function useSession() {
     [refresh]
   );
 
-  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession };
+  return { ...state, sendInstruction, selectTurn, handleImageUpload, handleMaskUpload, clearMask, handleMaskDrawingConfirm, handleSketchDrawingConfirm, undo, redo, retry, cancelExecution, deleteTurn, resumeSession, dismissPreviousSession };
 }

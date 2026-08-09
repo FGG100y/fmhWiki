@@ -297,7 +297,8 @@ async def upload_image(file: UploadFile = File(...), request: Request = None):
 async def execute_turn(session_id: str, req: CreateTurnRequest) -> dict:
     """异步执行工作流 — 创建 job 入队，立即返回 job_id/turn_id。"""
     logger.info(
-        "execute_turn: session=%s instruction=%s", session_id, req.instruction[:80]
+        "execute_turn: session=%s instruction=%s has_mask=%s mask_image_id=%s",
+        session_id, req.instruction[:80], bool(req.mask_image_id), req.mask_image_id,
     )
     session = store.get_session(session_id)
     if not session:

@@ -101,7 +101,10 @@ def execute_workflow(
     mask_image_url: str | None = None,
 ) -> None:
     """执行 LangGraph workflow 并更新任务状态"""
-    logger.info("execute_workflow: job=%s turn=%s instruction=%s", job_id, turn_id, instruction[:80])
+    logger.info(
+        "execute_workflow: job=%s turn=%s instruction=%s has_mask=%s mask_image_id=%s",
+        job_id, turn_id, instruction[:80], bool(mask_image_url), mask_image_id,
+    )
 
     # 更新状态为 running
     store.update_job(job_id, status=JobStatus.running.value)
