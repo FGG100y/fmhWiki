@@ -11,3 +11,5 @@ logs/
 frontend/node_modules/
 frontend/dist/
 uploads/
+.opencode/node_modules/
+.opencode/bun.lock

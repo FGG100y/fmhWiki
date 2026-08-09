@@ -316,7 +316,7 @@ agent_steps: list[AgentStep] = Field(default_factory=list)
 
 ### 4.1 规划工具（内部接口，规划模型可见）
 
-定义于新文件 `image_editor/tools/agent_tools.py`，均为 `async def`（aisuite `aexecute_tool` 直接支持协程，`tools.py:572`），返回**短 JSON**（URL 而非字节）。docstring 即工具 schema 来源，需按 docstring_parser 约定写参数说明。
+定义于新文件 `src/painterAgent/tools/agent_tools.py`，均为 `async def`（aisuite `aexecute_tool` 直接支持协程，`tools.py:572`），返回**短 JSON**（URL 而非字节）。docstring 即工具 schema 来源，需按 docstring_parser 约定写参数说明。
 
 ```python
 async def generate_image(prompt: str, aspect_ratio: str = "2K") -> dict:
@@ -353,7 +353,7 @@ async def inspect_image(image_url: str, question: str) -> str:
 
 ### 4.2 agentic 循环（对外接口，workflow 节点）
 
-定义于新文件 `image_editor/agents/agentic_editor.py`：
+定义于新文件 `src/painterAgent/agents/agentic_editor.py`：
 
 ```python
 async def run_agentic_edit(state: ImageEditState) -> dict:
@@ -394,7 +394,7 @@ result = await aisuite.Runner.run(agent, user_instruction,
 
 ### 4.3 示范注入（内部接口）
 
-定义于新文件 `image_editor/agents/demo_learning.py`：
+定义于新文件 `src/painterAgent/agents/demo_learning.py`：
 
 ```python
 def build_demonstration(session_id: str, before_turn_id: str,
@@ -451,7 +451,7 @@ def render_preference_prompt(profile: PreferenceProfile) -> str:
 
 ### 4.5 LLM 接入层接口
 
-定义于新文件 `image_editor/llm/aisuite_client.py`：
+定义于新文件 `src/painterAgent/llm/aisuite_client.py`：
 
 ```python
 def build_provider_configs() -> dict[str, dict]:
@@ -523,7 +523,7 @@ async def vision_answer(model: str, image_url: str, question: str) -> str:
 
 ## 6. 验收标准
 
-> 与项目既有做法一致（`image_editor/TODOs.md` 的 4 条功能验证链路），设计时就明确验收，把每个设计要素映射为可验证的链路与断言。链路 1–4 为**回归**（agentic 关闭时必须原样通过），链路 5–9 为**新功能验收**。通过标准：每条链路的断言全部满足。
+> 与项目既有做法一致（`TODOs.md` 的 4 条功能验证链路），设计时就明确验收，把每个设计要素映射为可验证的链路与断言。链路 1–4 为**回归**（agentic 关闭时必须原样通过），链路 5–9 为**新功能验收**。通过标准：每条链路的断言全部满足。
 
 ### 6.1 回归验收（决策模式默认不变）
 
