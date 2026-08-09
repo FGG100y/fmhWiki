@@ -248,14 +248,26 @@ class PostgresStore:
 
     def _execute(self, query: str, params=None, fetch: bool = False):
         conn = self._get_conn()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(query, params)
-            if fetch:
-                return cur.fetchall()
-            return None
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(query, params)
+                if fetch:
+                    return cur.fetchall()
+                return None
+        except Exception:
+            self._rollback()
+            raise
 
     def _commit(self):
         self._get_conn().commit()
+
+    def _rollback(self):
+        try:
+            conn = self._get_conn()
+            if not conn.closed:
+                conn.rollback()
+        except Exception:
+            pass
 
     # ---- Session ----
 

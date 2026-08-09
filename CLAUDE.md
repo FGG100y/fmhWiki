@@ -103,6 +103,7 @@ Frontend polls `/jobs/{job_id}` at 1s intervals after submitting an edit. The `/
 
 ## Critical constraints
 
+0. **sudo 命令**: 任何需要 `sudo` 的命令都**不要自行执行**，改为提示用户手动运行。因为 sudo 可能需要指纹验证或密码输入，自行执行会卡住。
 1. **Worker processes**: dramatiq defaults to `cpu_count` processes. Each loads Moebius into GPU VRAM independently → OOM. Always use `--processes 1 --threads 2`.
 2. **Moebius model is never unloaded**: `_cleanup_gpu()` only frees cache, not model params. Restart worker after Moebius code changes.
 3. **Seedream 5.0 is the sole model**: both LLM reasoning and image generation use the same `DOUBAO_MODEL` (multimodal). There is no separate LLM model.

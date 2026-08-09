@@ -108,18 +108,6 @@ export default function MaskCanvas({ imageUrl, onConfirm, onCancel }: Props) {
     img.onload = () => {
       if (cancelled) return;
       imgRef.current = img;
-      const canvas = canvasRef.current;
-      const container = containerRef.current;
-      if (!canvas || !container) return;
-      const containerW = container.clientWidth;
-      const containerH = container.clientHeight;
-      const scale = Math.min(containerW / img.width, containerH / img.height, 1);
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      canvas.width = w;
-      canvas.height = h;
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
       setLoaded(true);
     };
     img.src = imageUrl;
@@ -127,6 +115,33 @@ export default function MaskCanvas({ imageUrl, onConfirm, onCancel }: Props) {
       cancelled = true;
     };
   }, [imageUrl]);
+
+  // Resize canvas to match the container and image aspect ratio.
+  // Runs on container resize AND when the image finishes loading.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    const img = imgRef.current;
+    if (!canvas || !container || !img) return;
+
+    const resize = () => {
+      const containerW = container.clientWidth;
+      const containerH = container.clientHeight;
+      if (containerW === 0 || containerH === 0) return;
+      const scale = Math.min(containerW / img.width, containerH / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      canvas.width = w;
+      canvas.height = h;
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+    };
+
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [imageUrl, loaded]);
 
   return (
     <div className="mask-canvas-wrapper">

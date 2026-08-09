@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS turns (
     qa_passed BOOLEAN,
     qa_result JSONB DEFAULT '{}',
     error_message TEXT,
+    agent_steps JSONB DEFAULT '[]',
+    execution_mode VARCHAR(50) DEFAULT 'auto',
     created_at TIMESTAMP DEFAULT NOW()
 );
 
