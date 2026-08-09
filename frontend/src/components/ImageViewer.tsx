@@ -9,6 +9,7 @@ interface Props {
   instruction: string | null;
   loading: boolean;
   activeTool: ActiveTool;
+  maskUrl?: string | null;
   onMaskDrawingConfirm: (maskBlob: Blob) => void;
   onMaskDrawingCancel: () => void;
   onSketchDrawingConfirm: (blob: Blob) => void;
@@ -103,6 +104,7 @@ export default function ImageViewer({
   instruction,
   loading,
   activeTool,
+  maskUrl,
   onMaskDrawingConfirm,
   onMaskDrawingCancel,
   onSketchDrawingConfirm,
@@ -123,6 +125,92 @@ export default function ImageViewer({
     pinchDist: 0,
     pinchScale: 1,
   });
+
+  // ── Mask overlay ────────────────────────────────────
+  const maskCanvasRef = useRef<HTMLCanvasElement>(null);
+  const maskContainerRef = useRef<HTMLDivElement>(null);
+  const baseImgRef = useRef<HTMLImageElement>(null);
+  const processedMaskRef = useRef<HTMLCanvasElement | null>(null);
+  const [processedMaskReady, setProcessedMaskReady] = useState(0);
+  const maskUrlRef = useRef<string | null | undefined>(null);
+
+  // Preprocess mask image: convert to red overlay (transparent where no mask)
+  useEffect(() => {
+    if (!maskUrl) {
+      processedMaskRef.current = null;
+      maskUrlRef.current = null;
+      setProcessedMaskReady(0);
+      return;
+    }
+    maskUrlRef.current = maskUrl;
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      // Only update if this is still the current mask
+      if (maskUrlRef.current !== maskUrl) return;
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        if (brightness > 15) {
+          data[i] = 220;       // R — warm red
+          data[i + 1] = 30;
+          data[i + 2] = 30;
+          data[i + 3] = Math.min(255, brightness * 1.2);
+        } else {
+          data[i + 3] = 0;     // fully transparent
+        }
+      }
+      ctx.putImageData(imageData, 0, 0);
+      processedMaskRef.current = canvas;
+      setProcessedMaskReady((n) => n + 1);
+    };
+    img.src = maskUrl;
+  }, [maskUrl]);
+
+  // Render mask overlay canvas sized to match the base img element
+  useEffect(() => {
+    const canvas = maskCanvasRef.current;
+    const container = maskContainerRef.current;
+    const baseImg = baseImgRef.current;
+    if (!canvas || !container || !baseImg) return;
+    if (!maskUrl) return;
+
+    const renderOverlay = () => {
+      const processed = processedMaskRef.current;
+      if (!processed) return;
+      const imgRect = baseImg.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const cw = containerRect.width;
+      const ch = containerRect.height;
+      if (cw === 0 || ch === 0) return;
+      canvas.width = cw * dpr;
+      canvas.height = ch * dpr;
+      canvas.style.width = `${cw}px`;
+      canvas.style.height = `${ch}px`;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cw, ch);
+      // Draw processed mask at the same position/size as the base img
+      const ox = imgRect.left - containerRect.left;
+      const oy = imgRect.top - containerRect.top;
+      ctx.globalAlpha = 0.5;
+      ctx.drawImage(processed, ox, oy, imgRect.width, imgRect.height);
+    };
+
+    renderOverlay();
+    const observer = new ResizeObserver(renderOverlay);
+    observer.observe(baseImg);
+    return () => observer.disconnect();
+  }, [maskUrl, processedMaskReady]);
 
   const applyTransform = useCallback(() => {
     const img = imgRef.current;
@@ -282,15 +370,36 @@ export default function ImageViewer({
               </span>
             )}
           </div>
-          <div className="image-container output-container">
+          <div
+            className={`image-container output-container${maskUrl && !isShowingOutput ? " mask-container" : ""}`}
+            ref={maskUrl && !isShowingOutput ? maskContainerRef : undefined}
+            style={maskUrl && !isShowingOutput ? { position: "relative" } : undefined}
+          >
             {mainUrl ? (
-              <img
-                src={mainUrl}
-                alt={isShowingOutput ? "结果图片" : "输入图片"}
-                className="zoomable"
-                onClick={() => setZoomUrl(mainUrl)}
-                title="点击放大"
-              />
+              <>
+                <img
+                  ref={baseImgRef}
+                  src={mainUrl}
+                  alt={isShowingOutput ? "结果图片" : "输入图片"}
+                  className="zoomable"
+                  onClick={() => setZoomUrl(mainUrl)}
+                  title="点击放大"
+                />
+                {maskUrl && !isShowingOutput && (
+                  <canvas
+                    ref={maskCanvasRef}
+                    className="mask-overlay-canvas"
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      height: "100%",
+                      pointerEvents: "none",
+                    }}
+                  />
+                )}
+              </>
             ) : (
               <div className="image-placeholder">
                 {loading ? (

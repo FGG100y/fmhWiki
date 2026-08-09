@@ -1053,6 +1053,16 @@ body {
   touch-action: none;
 }
 
+/* ── Mask overlay on input image ────────────────────── */
+
+.mask-container {
+  position: relative;
+}
+
+.mask-overlay-canvas {
+  border-radius: var(--radius);
+}
+
 /* ── Sketch (白板) ─────────────────────────────────── */
 
 .sketch-canvas-wrapper {

@@ -55,6 +55,7 @@ export default function App() {
     handleMaskUpload,
     clearMask,
     maskFilename,
+    maskImageUrl,
     handleMaskDrawingConfirm,
     handleSketchDrawingConfirm,
     sketchFilename,
@@ -273,6 +274,7 @@ export default function App() {
               instruction={currentInstruction}
               loading={loading}
               activeTool={activeTool}
+              maskUrl={maskImageUrl}
               onMaskDrawingConfirm={onMaskConfirm}
               onMaskDrawingCancel={onMaskCancel}
               onSketchDrawingConfirm={onSketchConfirm}
